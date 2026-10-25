@@ -36,6 +36,7 @@ struct Wal {
     uint64_t durable_end = 0; // bytes on disk and synced
     uint64_t next_lsn = 1;
     uint64_t durable_lsn = 0; // highest committed LSN
+    uint64_t syncs = 0;       // completed fsync/fdatasync calls, shown on the dashboard
     uint8_t *buffer = nullptr;
     uint32_t capacity = 0, used = 0;
 

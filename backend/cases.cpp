@@ -50,6 +50,12 @@ void clear_cases(CaseStore &store) {
     ++store.next_generation;
 }
 
+int active_cases(const CaseStore &store) {
+    int n = 0;
+    for (const Case &c : store.cases) n += c.status != Status::done && c.status != Status::stopped;
+    return n;
+}
+
 int running_jobs(const CaseStore &store) {
     int n = 0;
     for (const Case &c : store.cases)

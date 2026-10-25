@@ -85,21 +85,7 @@ void make_scene(ArenaArray<Tri> &tris) {
 
 int tile_count_for(int width, int height, int tile) { return ((width + tile - 1) / tile) * ((height + tile - 1) / tile); }
 
-} // namespace
-
-// ---------------------------------------------------------------- start-up
-
-size_t raster_arena_bytes(int width, int height, int tile, int views) {
-    const size_t tiles = size_t(tile_count_for(width, height, tile));
-    const size_t per_view = Arena::budget_bytes(size_t(width) * size_t(height) * sizeof(uint32_t), kLineAlign) +
-                            Arena::budget<ScreenTri>(kSceneTriangles) +
-                            Arena::budget<ArenaArray<uint16_t>>(tiles) +
-                            tiles * Arena::budget<uint16_t>(kSceneTriangles);
-    return Arena::budget<Tri>(kSceneTriangles) + size_t(views) * per_view;
-}
-
-bool init_raster(RasterState &rs, Arena &arena, int width, int height, int tile, float lod_bias, int views) {
-    RasterSetup &s = rs.setup;
+void init_setup(RasterSetup &s, int width, int height, int tile, float lod_bias, const M4 &proj) {
     s.width = width;
     s.height = height;
     s.tile = tile;
@@ -107,54 +93,51 @@ bool init_raster(RasterState &rs, Arena &arena, int width, int height, int tile,
     s.tiles_y = (height + tile - 1) / tile;
     s.tile_count = s.tiles_x * s.tiles_y;
     s.lod_bias = lod_bias;
-    s.proj = perspective(1.0f, float(width) / float(height), 0.5f, 200.0f);
+    s.proj = proj;
+}
 
-    if (!rs.scene.init(arena, kSceneTriangles)) return false;
-    make_scene(rs.scene);
-    if (rs.scene.count != uint32_t(kSceneTriangles)) return false; // kSceneTriangles must match make_scene
+// Bytes of one view's triangles and tile bins.
+size_t bin_bytes(int width, int height, int tile) {
+    const size_t tiles = size_t(tile_count_for(width, height, tile));
+    return Arena::budget<ScreenTri>(kSceneTriangles) + Arena::budget<ArenaArray<uint16_t>>(tiles) + tiles * Arena::budget<uint16_t>(kSceneTriangles);
+}
 
-    for (int v = 0; v < views; ++v) {
-        ViewState *vs = rs.views.push();
-        if (!vs) return false;
-        const size_t color_bytes = size_t(width) * size_t(height) * sizeof(uint32_t);
-        vs->color = static_cast<uint32_t *>(arena.alloc_bytes(color_bytes, kLineAlign));
-        if (!vs->color) return false;
-        std::memset(vs->color, 0, color_bytes);
-        if (!vs->tris.init(arena, kSceneTriangles)) return false;
-        vs->bins = arena.alloc<ArenaArray<uint16_t>>(size_t(s.tile_count));
-        if (!vs->bins) return false;
-        for (int t = 0; t < s.tile_count; ++t)
-            if (!vs->bins[t].init(arena, kSceneTriangles)) return false;
-    }
+bool init_bins(ViewState &vs, Arena &arena, int tile_count) {
+    if (!vs.tris.init(arena, kSceneTriangles)) return false;
+    vs.bins = arena.alloc<ArenaArray<uint16_t>>(size_t(tile_count));
+    if (!vs.bins) return false;
+    for (int t = 0; t < tile_count; ++t)
+        if (!vs.bins[t].init(arena, kSceneTriangles)) return false;
     return true;
 }
 
-size_t worker_tile_bytes(int tile) {
-    const size_t pixels = size_t(tile) * size_t(tile);
-    return Arena::budget_bytes(pixels * sizeof(float), kLineAlign) + Arena::budget_bytes(pixels * sizeof(uint32_t), kLineAlign);
+// A depth buffer starts at the far plane, the value an uncovered pixel keeps.
+float *alloc_depth(Arena &arena, int width, int height) {
+    const size_t pixels = size_t(width) * size_t(height);
+    auto *d = static_cast<float *>(arena.alloc_bytes(pixels * sizeof(float), kLineAlign));
+    if (d) std::fill(d, d + pixels, 1.0f);
+    return d;
 }
 
-bool init_worker_tile(WorkerTile &wt, Arena &arena, int tile) {
-    const size_t pixels = size_t(tile) * size_t(tile);
-    wt.depth = static_cast<float *>(arena.alloc_bytes(pixels * sizeof(float), kLineAlign));
-    wt.color = static_cast<uint32_t *>(arena.alloc_bytes(pixels * sizeof(uint32_t), kLineAlign));
-    return wt.depth && wt.color;
-}
+// The lidar mount: the rig origin.
+// Roof height of a vehicle rig: above the centre box, so returns come from the surrounding scene.
+constexpr V3 kLidarMount = {0, 2, 0};
+// Face axes in view-table order.
+constexpr V3 kLidarAxes[kLidarViews] = {{1, 0, 0}, {-1, 0, 0}, {0, 0, 1}, {0, 0, -1}};
+// Azimuth sector (0: around +x, 1: +z, 2: -x, 3: -z, following the azimuth direction) to view-table face.
+constexpr int kSectorFace[4] = {0, 2, 1, 3};
 
-// ---------------------------------------------------------------- transforms and binning (main thread)
-
-bool bin_view(RasterState &rs, TextureCache &cache, int v, int f) {
-    const RasterSetup &s = rs.setup;
-    const int W = s.width, H = s.height, V = int(rs.views.count), tile = s.tile;
-    ViewState &vs = rs.views[uint32_t(v)];
-
-    float angle = float(v) * 6.2831853f / float(V) + float(f) * 0.01f;
-    M4 mvp = mul(s.proj, look_at({std::cos(angle) * 34, 14, std::sin(angle) * 34}, {0, 0, 0}));
+// Transforms the scene with `mvp` and rebuilds the view's triangles and bins. Textured views resolve each
+// triangle's texture level; depth-only views leave texels null and never read the cache. Returns false only when
+// the cache cannot make a copy.
+template <bool kTextured>
+bool bin_triangles(const RasterSetup &s, const ArenaArray<Tri> &scene, ViewState &vs, const M4 &mvp, TextureCache *cache, int v, int f) {
+    const int W = s.width, H = s.height, tile = s.tile;
 
     vs.tris.clear();
     for (int t = 0; t < s.tile_count; ++t) vs.bins[t].clear();
 
-    for (const Tri &tri : rs.scene) {
+    for (const Tri &tri : scene) {
         const Vertex *vx[3] = {&tri.a, &tri.b, &tri.c};
         ScreenTri st{};
         bool visible = true;
@@ -173,15 +156,17 @@ bool bin_view(RasterState &rs, TextureCache &cache, int v, int f) {
         float area = std::fabs((st.x[1] - st.x[0]) * (st.y[2] - st.y[0]) - (st.x[2] - st.x[0]) * (st.y[1] - st.y[0])) * 0.5f;
         if (area < 0.5f) continue;
 
-        // Streamed variant: textures of each view rotate every 60 frames.
-        const Texture *tex = tri.texture == 0 ? &cache.base[0] : cache.get(v, tri.texture, f / 60);
-        if (!tex) return false;
-        float uv_area = 0.5f * std::fabs((tri.b.u - tri.a.u) * (tri.c.v - tri.a.v) - (tri.c.u - tri.a.u) * (tri.b.v - tri.a.v)) * float(tex->size) * float(tex->size);
-        int lod = int(std::floor(0.5f * std::log2(std::max(1.0f, uv_area / area)) + s.lod_bias));
-        TextureLevel level = select_level(*tex, lod);
-        st.texels = level.texels;
-        st.size = level.size;
-        st.shade = tri.shade;
+        if constexpr (kTextured) {
+            // Streamed variant: textures of each view rotate every 60 frames.
+            const Texture *tex = tri.texture == 0 ? &cache->base[0] : cache->get(v, tri.texture, f / 60);
+            if (!tex) return false;
+            float uv_area = 0.5f * std::fabs((tri.b.u - tri.a.u) * (tri.c.v - tri.a.v) - (tri.c.u - tri.a.u) * (tri.b.v - tri.a.v)) * float(tex->size) * float(tex->size);
+            int lod = int(std::floor(0.5f * std::log2(std::max(1.0f, uv_area / area)) + s.lod_bias));
+            TextureLevel level = select_level(*tex, lod);
+            st.texels = level.texels;
+            st.size = level.size;
+            st.shade = tri.shade;
+        }
 
         // Capacity: each scene triangle adds at most one entry to tris and at most one index to any bin, and every
         // array holds kSceneTriangles, so neither write can overflow.
@@ -198,12 +183,11 @@ bool bin_view(RasterState &rs, TextureCache &cache, int v, int f) {
     return true;
 }
 
-// ---------------------------------------------------------------- tile rasterization (worker threads)
-
-void raster_tiles(RasterState &rs, int view, WorkerTile &wt, int worker, int workers) {
-    const RasterSetup &s = rs.setup;
+// Rasterizes the worker's tiles of one view. kShade adds texture sampling and colour; the depth-only path runs the
+// same coverage and depth test. A view with a depth buffer receives each finished tile's depth.
+template <bool kShade>
+void raster_view_tiles(const RasterSetup &s, ViewState &vs, WorkerTile &wt, int worker, int workers) {
     const int W = s.width, H = s.height, tile = s.tile;
-    ViewState &vs = rs.views[uint32_t(view)];
     float *depth = wt.depth;
     uint32_t *tile_color = wt.color;
 
@@ -211,7 +195,7 @@ void raster_tiles(RasterState &rs, int view, WorkerTile &wt, int worker, int wor
         int x0 = (ti % s.tiles_x) * tile, y0 = (ti / s.tiles_x) * tile;
         int x1 = std::min(x0 + tile, W), y1 = std::min(y0 + tile, H);
         std::fill(depth, depth + size_t(tile) * tile, 1.0f);
-        std::fill(tile_color, tile_color + size_t(tile) * tile, 0xff3a2a1eu);
+        if constexpr (kShade) std::fill(tile_color, tile_color + size_t(tile) * tile, 0xff3a2a1eu);
 
         for (uint16_t idx : vs.bins[ti]) {
             const ScreenTri &st = vs.tris[idx];
@@ -233,18 +217,149 @@ void raster_tiles(RasterState &rs, int view, WorkerTile &wt, int worker, int wor
                     float &d = depth[size_t(py - y0) * tile + (px - x0)];
                     if (z >= d) continue;
                     d = z;
-                    float iw = w0 * st.inv_w[0] + w1 * st.inv_w[1] + w2 * st.inv_w[2];
-                    float u = (w0 * st.u_w[0] + w1 * st.u_w[1] + w2 * st.u_w[2]) / iw;
-                    float v = (w0 * st.v_w[0] + w1 * st.v_w[1] + w2 * st.v_w[2]) / iw;
-                    uint32_t texel = sample_bilinear(st.texels, st.size, u, v);
-                    uint32_t rgb = 0;
-                    for (int c = 0; c < 3; ++c)
-                        rgb |= uint32_t(kColor.encode(kColor.to_linear[(texel >> (8 * c)) & 255] * st.shade)) << (8 * c);
-                    tile_color[size_t(py - y0) * tile + (px - x0)] = rgb | 0xff000000u;
+                    if constexpr (kShade) {
+                        float iw = w0 * st.inv_w[0] + w1 * st.inv_w[1] + w2 * st.inv_w[2];
+                        float u = (w0 * st.u_w[0] + w1 * st.u_w[1] + w2 * st.u_w[2]) / iw;
+                        float v = (w0 * st.v_w[0] + w1 * st.v_w[1] + w2 * st.v_w[2]) / iw;
+                        uint32_t texel = sample_bilinear(st.texels, st.size, u, v);
+                        uint32_t rgb = 0;
+                        for (int c = 0; c < 3; ++c)
+                            rgb |= uint32_t(kColor.encode(kColor.to_linear[(texel >> (8 * c)) & 255] * st.shade)) << (8 * c);
+                        tile_color[size_t(py - y0) * tile + (px - x0)] = rgb | 0xff000000u;
+                    }
                 }
         }
 
-        for (int y = y0; y < y1; ++y)
-            std::memcpy(&vs.color[size_t(y) * W + x0], &tile_color[size_t(y - y0) * tile], size_t(x1 - x0) * 4);
+        if constexpr (kShade)
+            for (int y = y0; y < y1; ++y)
+                std::memcpy(&vs.color[size_t(y) * W + x0], &tile_color[size_t(y - y0) * tile], size_t(x1 - x0) * 4);
+        if (vs.depth)
+            for (int y = y0; y < y1; ++y)
+                std::memcpy(&vs.depth[size_t(y) * W + x0], &depth[size_t(y - y0) * tile], size_t(x1 - x0) * sizeof(float));
     }
+}
+
+} // namespace
+
+// ---------------------------------------------------------------- start-up
+
+size_t raster_arena_bytes(int width, int height, int tile, int cameras, bool depth, bool lidar) {
+    const size_t per_view = Arena::budget_bytes(size_t(width) * size_t(height) * sizeof(uint32_t), kLineAlign) + bin_bytes(width, height, tile);
+    const size_t depth_bytes = depth ? Arena::budget_bytes(size_t(width) * size_t(height) * sizeof(float), kLineAlign) : 0;
+    const size_t per_face = Arena::budget_bytes(size_t(kLidarWidth) * kLidarHeight * sizeof(float), kLineAlign) +
+                            bin_bytes(kLidarWidth, kLidarHeight, tile);
+    return Arena::budget<Tri>(kSceneTriangles) + size_t(cameras) * per_view + depth_bytes +
+           (lidar ? Arena::budget<LidarRig>() + kLidarViews * per_face : 0);
+}
+
+bool init_raster(RasterState &rs, Arena &arena, int width, int height, int tile, float lod_bias, int cameras, bool depth, bool lidar) {
+    RasterSetup &s = rs.setup;
+    init_setup(s, width, height, tile, lod_bias, perspective(1.0f, float(width) / float(height), kNear, kFar));
+    rs.cameras = cameras;
+
+    if (!rs.scene.init(arena, kSceneTriangles)) return false;
+    make_scene(rs.scene);
+    if (rs.scene.count != uint32_t(kSceneTriangles)) return false; // kSceneTriangles must match make_scene
+
+    for (int v = 0; v < cameras; ++v) {
+        ViewState *vs = rs.views.push();
+        if (!vs) return false;
+        const size_t color_bytes = size_t(width) * size_t(height) * sizeof(uint32_t);
+        vs->color = static_cast<uint32_t *>(arena.alloc_bytes(color_bytes, kLineAlign));
+        if (!vs->color) return false;
+        std::memset(vs->color, 0, color_bytes);
+        if (!init_bins(*vs, arena, s.tile_count)) return false;
+    }
+    if (depth && cameras > 0 && !(rs.views[0].depth = alloc_depth(arena, width, height))) return false;
+    if (!lidar) return true;
+
+    // 90 degree horizontal field of view: perspective() scales x by tan(fovy / 2) * aspect, which is 1 when
+    // tan(fovy / 2) = height / width.
+    if (!(rs.rig = arena.alloc<LidarRig>())) return false;
+    LidarRig &rig = *rs.rig;
+    const float aspect = float(kLidarWidth) / float(kLidarHeight);
+    init_setup(rig.setup, kLidarWidth, kLidarHeight, tile, 0.0f, perspective(2.0f * std::atan(1.0f / aspect), aspect, kNear, kFar));
+    for (int k = 0; k < kLidarViews; ++k) {
+        const V3 axis = kLidarAxes[k];
+        rig.mvp[k] = mul(rig.setup.proj, look_at(kLidarMount, {kLidarMount.x + axis.x, kLidarMount.y + axis.y, kLidarMount.z + axis.z}));
+        ViewState *vs = rs.views.push();
+        if (!vs) return false;
+        if (!(vs->depth = alloc_depth(arena, kLidarWidth, kLidarHeight))) return false;
+        if (!init_bins(*vs, arena, rig.setup.tile_count)) return false;
+    }
+    constexpr float kDeg = 3.14159265358979f / 180.0f;
+    for (int r = 0; r < kLidarRings; ++r) {
+        const float el = (kLidarMinElevationDeg + (kLidarMaxElevationDeg - kLidarMinElevationDeg) * float(r) / float(kLidarRings - 1)) * kDeg;
+        rig.cos_el[r] = std::cos(el);
+        rig.sin_el[r] = std::sin(el);
+    }
+    for (int a = 0; a < kLidarSteps; ++a) {
+        const float az = float(a) * (2.0f * 3.14159265358979f / float(kLidarSteps));
+        rig.cos_az[a] = std::cos(az);
+        rig.sin_az[a] = std::sin(az);
+    }
+    return true;
+}
+
+size_t worker_tile_bytes(int tile) {
+    const size_t pixels = size_t(tile) * size_t(tile);
+    return Arena::budget_bytes(pixels * sizeof(float), kLineAlign) + Arena::budget_bytes(pixels * sizeof(uint32_t), kLineAlign);
+}
+
+bool init_worker_tile(WorkerTile &wt, Arena &arena, int tile) {
+    const size_t pixels = size_t(tile) * size_t(tile);
+    wt.depth = static_cast<float *>(arena.alloc_bytes(pixels * sizeof(float), kLineAlign));
+    wt.color = static_cast<uint32_t *>(arena.alloc_bytes(pixels * sizeof(uint32_t), kLineAlign));
+    return wt.depth && wt.color;
+}
+
+// ---------------------------------------------------------------- transforms and binning (main thread)
+
+bool bin_view(RasterState &rs, TextureCache &cache, int v, int f) {
+    float angle = float(v) * 6.2831853f / float(rs.cameras) + float(f) * 0.01f;
+    M4 mvp = mul(rs.setup.proj, look_at({std::cos(angle) * 34, 14, std::sin(angle) * 34}, {0, 0, 0}));
+    return bin_triangles<true>(rs.setup, rs.scene, rs.views[uint32_t(v)], mvp, &cache, v, f);
+}
+
+void bin_lidar_face(RasterState &rs, int face) {
+    bin_triangles<false>(rs.rig->setup, rs.scene, rs.views[uint32_t(rs.cameras + face)], rs.rig->mvp[face], nullptr, 0, 0);
+}
+
+// ---------------------------------------------------------------- tile rasterization (worker threads)
+
+void raster_tiles(RasterState &rs, int view, WorkerTile &wt, int worker, int workers) {
+    ViewState &vs = rs.views[uint32_t(view)];
+    if (view < rs.cameras) raster_view_tiles<true>(rs.setup, vs, wt, worker, workers);
+    else raster_view_tiles<false>(rs.rig->setup, vs, wt, worker, workers);
+}
+
+// ---------------------------------------------------------------- lidar sampling (main thread)
+
+uint32_t sample_lidar(const RasterState &rs, LidarPoint *points) {
+    const LidarRig &rig = *rs.rig;
+    const int W = rig.setup.width, H = rig.setup.height;
+    constexpr int kSector = kLidarSteps / 4, kHalfSector = kLidarSteps / 8;
+    uint32_t n = 0;
+
+    for (int r = 0; r < kLidarRings; ++r)
+        for (int a = 0; a < kLidarSteps; ++a) {
+            // Each face covers the steps within 45 degrees of its axis, so the unit ray's eye depth c.w is at least
+            // cos(45) * cos(15) = 0.68.
+            const int face = kSectorFace[((a + kHalfSector) / kSector) % 4];
+            const V3 dir = {rig.cos_el[r] * rig.cos_az[a], rig.sin_el[r], rig.cos_el[r] * rig.sin_az[a]};
+            const V4 c = xform(rig.mvp[face], {kLidarMount.x + dir.x, kLidarMount.y + dir.y, kLidarMount.z + dir.z});
+            const float iw = 1.0f / c.w;
+
+            // The pixel the ray passes through, mapped exactly as bin_triangles() maps vertices. Only rounding at
+            // a face edge (azimuth exactly 45 degrees off the axis) can land one pixel outside.
+            const int px = std::clamp(int((c.x * iw * 0.5f + 0.5f) * W), 0, W - 1);
+            const int py = std::clamp(int((1.0f - (c.y * iw * 0.5f + 0.5f)) * H), 0, H - 1);
+            const float depth = linear_depth(rs.views[uint32_t(rs.cameras + face)].depth[size_t(py) * W + px]);
+            if (!(depth < kFar)) continue;
+
+            // Eye depth grows linearly along the ray: the hit lies depth / c.w unit lengths from the mount.
+            const float t = depth * iw;
+            points[n++] = {dir.x * t, dir.y * t, dir.z * t, 1.0f - depth / kFar};
+        }
+    return n;
 }

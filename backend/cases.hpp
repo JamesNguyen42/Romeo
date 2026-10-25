@@ -254,6 +254,9 @@ void apply(Case &c, yyjson_val *ev);
 bool can_apply(const Case &c, yyjson_val *ev, std::string_view &reason);
 
 int running_jobs(const CaseStore &store);
+
+// Cases that are neither done nor stopped.
+int active_cases(const CaseStore &store);
 bool has_run(const Case &c, bool baseline);
 bool requirements_met(const Case &c, const Requirements &r);
 

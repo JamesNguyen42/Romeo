@@ -53,6 +53,9 @@ struct SpawnQueue {
 // Makes the WAL buffer durable, streams the committed events, then starts the jobs whose records are now durable.
 void commit_iteration(Service &s);
 
+// Started job processes that have not written their exit file yet.
+int job_processes_running(const Service &s);
+
 // ---------------------------------------------------------------- lifecycle
 
 // Rebuilds the case store from the WAL, then marks every case with pending actions as restarted.

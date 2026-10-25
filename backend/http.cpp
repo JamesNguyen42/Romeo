@@ -1,3 +1,6 @@
+#include <dirent.h>
+#include <fcntl.h>
+#include <unistd.h>
 #include "http.hpp"
 
 #include <algorithm>
@@ -138,6 +141,54 @@ static bool append_event(const Service &s, Body &b, const EventRef &e) {
 
 static Body *body_in_arena(Service &s) { return s.request.alloc<Body>(); }
 
+// Live renderer and tool processes, read from /proc (Linux only): the dashboard's proof that real work runs.
+static void processes_json(Body &b) {
+    b.add("[");
+#if defined(__linux__)
+    DIR *d = opendir("/proc");
+    long ticks = sysconf(_SC_CLK_TCK), page_kb = sysconf(_SC_PAGESIZE) / 1024;
+    double uptime = 0;
+    if (FILE *u = fopen("/proc/uptime", "r")) { char t[64] = {}; if (fgets(t, sizeof t, u)) uptime = parse_leading_double(t); fclose(u); }
+    int shown = 0;
+    while (struct dirent *e = d ? readdir(d) : nullptr) {
+        if (e->d_name[0] < '1' || e->d_name[0] > '9' || shown >= 12) continue;
+        char path[64], cmd[512] = {}, stat[1024] = {}, statm[128] = {};
+        FixedStringBuilder<64> pb;
+        auto slurp = [&](const char *name, char *out, size_t cap) {
+            pb.clear();
+            cat(pb, "/proc/", std::string_view(e->d_name), "/", std::string_view(name));
+            int fd = open(pb.c_str(), O_RDONLY | O_CLOEXEC);
+            if (fd < 0) return ssize_t(0);
+            ssize_t n = read(fd, out, cap - 1);
+            close(fd);
+            return n < 0 ? ssize_t(0) : n;
+        };
+        (void)path;
+        ssize_t n = slurp("cmdline", cmd, sizeof cmd);
+        if (n <= 0) continue;
+        for (ssize_t i = 0; i + 1 < n; ++i) if (!cmd[i]) cmd[i] = ' ';
+        std::string_view line(cmd, size_t(n) - (cmd[n - 1] ? 0 : 1));
+        bool render = line.find("romeo-render") != std::string_view::npos && line.find("sh -c") == std::string_view::npos;
+        bool tool = line.find("/tools/") != std::string_view::npos && line.find("python3") != std::string_view::npos;
+        if (!render && !tool) continue;
+        slurp("stat", stat, sizeof stat);
+        slurp("statm", statm, sizeof statm);
+        // stat field 22 is the start time in clock ticks; fields are counted after the ")" that ends the command name.
+        const char *p = strrchr(stat, ')');
+        double start = 0;
+        for (int field = 2; p && *p; ++p)
+            if (*p == ' ' && ++field == 22) { start = parse_leading_double(p + 1); break; }
+        const char *rss = strchr(statm, ' ');
+        double rss_mb = rss ? parse_leading_double(rss + 1) * double(page_kb) / 1024.0 : 0;
+        cat(b, shown ? "," : "", "{\"pid\":", std::string_view(e->d_name), ",\"cmd\":", json_string(line.substr(0, 300)),
+            ",\"elapsed_s\":", decimal(ticks > 0 ? uptime - start / double(ticks) : 0, 1), ",\"rss_mb\":", decimal(rss_mb, 0), "}");
+        ++shown;
+    }
+    if (d) closedir(d);
+#endif
+    b.add("]");
+}
+
 static void system_json(Service &s, Body &b) {
     const Sampler &m = *s.sampler;
     const CaseStore &store = *s.store;
@@ -159,6 +210,10 @@ static void system_json(Service &s, Body &b) {
         cat(b, "{\"up\":true,\"generation_tokens_total\":", decimal(o.generation_tokens, 0), ",\"prompt_tokens_total\":", decimal(o.prompt_tokens, 0),
             ",\"requests_running\":", decimal(o.requests_running, 0), ",\"spec_draft_tokens_total\":", decimal(o.spec_draft, 0),
             ",\"spec_accepted_tokens_total\":", decimal(o.spec_accepted, 0), ",\"kv_cache_usage\":", decimal(o.kv_cache_usage, 3), "}");
+    cat(b, ",\"jobs\":{\"running\":", job_processes_running(s), ",\"queued\":", s.spawns->items.count, "}");
+    cat(b, ",\"wal\":{\"lsn\":", s.wal->durable_lsn, ",\"bytes\":", s.wal->durable_end, ",\"fsyncs\":", s.wal->syncs, "}");
+    b.add(",\"processes\":");
+    processes_json(b);
     cat(b, ",\"t_ms\":", now_ms(), "}");
 }
 
@@ -541,9 +596,12 @@ static void handle(Service &s, Conn &conn, const Request &r) {
         return;
     }
     if (post && path == "/api/demo/load") {
+        // With ROMEO_MAX_ACTIVE set, only that many cases open now; open_next_demo_case() opens the rest one by one.
+        s.store->demo_rolling = s.cfg.max_active > 0;
         int opened = 0;
         for (const CaseDef &d : store.defs) {
             if (find_case(store, d.id.view())) continue;
+            if (s.cfg.max_active > 0 && active_cases(store) >= s.cfg.max_active) break;
             if (!open_case(s, d, "", "")) {
                 RLOG_WARN("demo: case {} could not be opened (case store full or event refused)", d.id.view());
                 break;

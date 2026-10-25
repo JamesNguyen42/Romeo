@@ -90,6 +90,7 @@ struct Config {
     FixedString<kUrlBytes> ornith_metrics, clef, ornith, memory;
     bool think = true;
     int frames = 300;
+    int max_active = 0;   // ROMEO_MAX_ACTIVE: cases in progress at once in demo mode (0 = no limit)
     FixedString<kPathBytes> render_abs, tools_abs; // resolved once at start-up, like fs::absolute
 };
 

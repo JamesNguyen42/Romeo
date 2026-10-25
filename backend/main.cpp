@@ -136,6 +136,7 @@ bool load_config(Config &c) {
     c.think = std::string_view(think && *think ? think : "1") == "1";
     c.port = env_int("ROMEO_PORT", 8790);
     c.frames = env_int("ROMEO_FRAMES", 300);
+    c.max_active = env_int("ROMEO_MAX_ACTIVE", 0);
     ok = ok && absolute(c.render_abs, c.render) && absolute(c.tools_abs, c.tools) && c.tools_abs.len < kMaxRoot;
     return ok;
 }

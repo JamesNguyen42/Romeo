@@ -95,6 +95,7 @@ void truncate_tail(Wal &w, uint64_t good_end, uint64_t file_size) {
         std::abort();
     }
     sync_fd(w.fd);
+    ++w.syncs;
 }
 
 void write_and_sync(Wal &w) {
@@ -110,6 +111,7 @@ void write_and_sync(Wal &w) {
         done += uint32_t(n);
     }
     sync_fd(w.fd);
+    ++w.syncs;
 }
 
 } // namespace wal_detail

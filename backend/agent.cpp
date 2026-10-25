@@ -169,17 +169,20 @@ static bool start_job(Service &s, Case &c, const SpawnRequest &r) {
 }
 
 // A job process is running when its outbox file exists (it was started) and its exit file does not.
-static bool job_process_running(const Service &s) {
+int job_processes_running(const Service &s) {
+    int n = 0;
     for (const Case &c : s.store->cases)
         for (const Pending &p : c.pending) {
             if (!p.job) continue;
             PathText outbox, exit_file;
             cat(outbox, s.cfg.data, "/outbox/", p.action_id, ".json");
             cat(exit_file, p.dir, "/exit");
-            if (file_exists(outbox.c_str()) && !file_exists(exit_file.c_str())) return true;
+            n += file_exists(outbox.c_str()) && !file_exists(exit_file.c_str());
         }
-    return false;
+    return n;
 }
+
+static bool job_process_running(const Service &s) { return job_processes_running(s) > 0; }
 
 void commit_iteration(Service &s) {
     wal_commit(*s.wal, [&](const WalRecord &r) { broadcast_committed(s, r); });
@@ -669,9 +672,25 @@ void on_case_call_done(Service &s, ModelCall &call, long http, CURLcode rc) {
 
 // ---------------------------------------------------------------- the agent step
 
+// Demo pacing: with ROMEO_MAX_ACTIVE set and the demo set loaded, open the next unopened demo case whenever fewer
+// than that many cases are still in progress.
+static void open_next_demo_case(Service &s) {
+    CaseStore &store = *s.store;
+    if (s.cfg.max_active <= 0 || active_cases(store) >= s.cfg.max_active) return;
+    bool demo_loaded = false;
+    for (const CaseDef &d : store.defs) demo_loaded = demo_loaded || find_case(store, d.id.view());
+    if (!demo_loaded) return;
+    for (const CaseDef &d : store.defs)
+        if (!find_case(store, d.id.view())) {
+            open_case(s, d, "", "");
+            return;
+        }
+}
+
 void agent_tick(Service &s) {
     CaseStore &store = *s.store;
     const int64_t now = now_ms();
+    open_next_demo_case(s);
     for (uint32_t ci = 0; ci < store.cases.count; ++ci) {
         Case &c = store.cases[ci];
         if (c.frozen) continue;
