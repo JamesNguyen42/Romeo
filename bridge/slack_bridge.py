@@ -233,8 +233,11 @@ def on_event(e):
             update_card(cid, 5 if typ == "done" else None, d.get("summary", d.get("reason", ""))[:200], outcome=typ)
     except Exception as ex:
         print("card failed:", type(ex).__name__, flush=True)
-    if typ == "case_opened" and d.get("channel"):
+    slack_channel = str(d.get("channel", ""))[:1] in ("C", "D", "G")  # opened from a Slack message: its thread already exists
+    if typ == "case_opened" and slack_channel:
         chat_cases.add(cid)
+    elif typ == "case_opened" and d.get("channel") == "monitor" and cid not in state["threads"]:
+        post(cid, f":rotating_light: *Alert from production telemetry* — Juliette opened *{cid}*\n>{d.get('report', '')[:500]}")
     elif typ == "case_opened" and cid not in state["threads"]:
         post(cid, f":inbox_tray: *{cid}* — {d.get('title', '')}\n>{d.get('report', '')[:400]}")
     elif typ == "decision":

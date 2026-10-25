@@ -1,0 +1,14 @@
+[Unit]
+Description=Juliette telemetry monitor (current release on rotating rigs; fixed alert rules open cases)
+After=romeo.service
+
+[Service]
+User=dell
+WorkingDirectory=/opt/hack/Romeo
+EnvironmentFile=/opt/hack/Romeo/deploy/romeo.env
+ExecStart=/usr/bin/python3 -u /opt/hack/Romeo/bridge/telemetry_monitor.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
