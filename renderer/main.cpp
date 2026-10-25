@@ -108,6 +108,10 @@ struct Bugs {
 
 constexpr std::string_view kUsage = "usage: romeo-render --setup A..J [--frames N] [--bug a,b] [--trace] [--lidar-every N] [--out dir] [--preview-frames 0..40] [--view-seed N]\n";
 constexpr int kMaxPreviewFrames = 40;
+// ROMEO_CAPTURE_LAST=N keeps view 0 of N frames near the end, kCaptureStride frames apart, at half resolution:
+// capture-00.png .. for before/after animations. An environment variable rather than a flag, so revisions without
+// it ignore the request instead of rejecting the command line.
+constexpr int kMaxCaptures = 8, kCaptureStride = 4;
 constexpr int kPreviewWidth = 480, kPreviewHeight = 270;
 
 constexpr size_t kAssetBytes = 64u << 20;            // the streamed asset file
@@ -520,6 +524,20 @@ int main(int argc, char **argv) {
     if (setup->motion && !(motion_rgba = static_cast<uint32_t *>(arena.alloc_bytes(size_t(W) * size_t(H) * sizeof(uint32_t), kBlockAlign))))
         fatal_arena(log, "main", arena, plan.main_bytes);
 
+    // Captured frames. A separate arena, reserved only when captures are requested; its pages are touched in the last
+    // frames only, so earlier memory rows are unaffected.
+    const char *capture_env = std::getenv("ROMEO_CAPTURE_LAST");
+    const int captures = std::clamp(capture_env ? std::atoi(capture_env) : 0, 0, std::min(kMaxCaptures, frames));
+    const int CW = W / 2, CH = H / 2;
+    const size_t capture_bytes = size_t(CW) * size_t(CH) * sizeof(uint32_t);
+    Arena capture_arena{};
+    uint32_t *capture_rgba = nullptr;
+    if (captures) {
+        capture_arena = reserve_arena(Arena::budget_bytes(capture_bytes * size_t(captures), kBlockAlign) + png_scratch_bytes(CW, CH, 4));
+        if (!capture_arena.base || !(capture_rgba = static_cast<uint32_t *>(capture_arena.alloc_bytes(capture_bytes * size_t(captures), kBlockAlign))))
+            fatal_arena(log, "capture", capture_arena, capture_bytes * size_t(captures));
+    }
+
     FixedArray<WorkerContext, kMaxWorkers> worker_ctx;
     for (int w = 0; w < workers; ++w) {
         WorkerContext *c = worker_ctx.push();
@@ -646,6 +664,14 @@ int main(int argc, char **argv) {
 
         double ms = ms_since(t0);
         frame_ms[f] = ms;
+        // Capture after the frame time is taken: the copy is not part of any measured frame.
+        const int k = captures - 1 - (frames - 1 - f) / kCaptureStride;
+        if (captures && (frames - 1 - f) % kCaptureStride == 0 && k >= 0) {
+            const uint32_t *src = setup->motion ? raster.motion->blurred : raster.views[0].color;
+            uint32_t *dst = capture_rgba + size_t(k) * size_t(CW) * size_t(CH);
+            for (int y = 0; y < CH; ++y)
+                for (int x = 0; x < CW; ++x) dst[size_t(y) * CW + x] = src[size_t(2 * y) * W + 2 * x];
+        }
         add_frame_row(frames_csv, f, ms);
         if (f % 5 == 0) add_memory_row(memory_csv, ms_since(log.t0), resident_bytes());
         if (trace) traces[0].span(TraceName::frame, tf, ms);
@@ -669,6 +695,16 @@ int main(int argc, char **argv) {
     if (setup->motion) motion = motion_metrics(raster);
     const uint32_t *view0 = setup->motion ? raster.motion->blurred : raster.views[0].color;
     write_png(join_path(out, "image.png").data, view0, W, H, png_arena);
+    for (int k = 0; k < captures; ++k) {
+        FixedStringBuilder<32> name;
+        name.add("capture-");
+        if (k < 10) name.add('0');
+        name.num(k).add(".png");
+        ArenaScope scope(capture_arena);
+        if (!write_png(join_path(out, name.view()).data, capture_rgba + size_t(k) * size_t(CW) * size_t(CH), CW, CH, capture_arena))
+            log.line("error", "output_write_failed", "\"file\":\"capture\"");
+    }
+    if (captures) release_arena(capture_arena);
     if (setup->motion) {
         motion_image(raster, motion_rgba);
         if (!write_png(join_path(out, "motion.png").data, motion_rgba, W, H, png_arena))

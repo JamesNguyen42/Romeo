@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Draw this case's evidence from its own runs: frame spikes, the thread timeline at the worst spike, memory over time,
 and a before/after render crop. Release (current) runs are compared with previous-build runs. Writes SVG and PNG."""
-import base64, csv, glob, json, os, struct, subprocess, sys, zlib
+import base64, csv, glob, json, os, shutil, struct, subprocess, sys, zlib
 from pathlib import Path
 sys.path.insert(0, os.path.dirname(__file__) + "/lib")
 from tool import INPUT, JOB, finish
@@ -138,5 +138,33 @@ if cur and prev:
     extra = f" · motion-vector error {summ['mv_error_px']:.2f} px" if summ.get("mv_error_px") is not None else ""
     made += save("render", svg(w, h, body, "Render: previous build vs this build", f"{case} · centre crop {cw}x{ch} of the last frame{extra}"))
     facts.append("Chart: render crop of the previous build, this build and their difference" + (f" (motion-vector error {summ['mv_error_px']:.2f} px)." if extra else "."))
+
+# 5. Motion: the last captured frames of both builds side by side, as an animation (renderer ROMEO_CAPTURE_LAST).
+cur, prev = runs_with("capture-00.png")
+if cur and prev and shutil.which("ffmpeg") and (cur[-1] / "motion.png").is_file():  # motion setups only
+    a_frames, b_frames = sorted(prev[-1].glob("capture-*.png")), sorted(cur[-1].glob("capture-*.png"))
+    n = min(len(a_frames), len(b_frames))
+    summ_a = json.load(open(prev[-1] / "summary.json")) if (prev[-1] / "summary.json").is_file() else {}
+    summ_b = json.load(open(cur[-1] / "summary.json")) if (cur[-1] / "summary.json").is_file() else {}
+    mv = lambda s: f" · motion-vector error {s['mv_error_px']:.2f} px" if s.get("mv_error_px") is not None else ""
+    cw, ch = 960, 540
+    tmp = JOB / "anim"
+    tmp.mkdir(exist_ok=True)
+    for k in range(n):
+        b64 = lambda p: "data:image/png;base64," + base64.b64encode(p.read_bytes()).decode()
+        body = (f'<image x="28" y="90" width="{cw}" height="{ch}" href="{b64(a_frames[k])}"/><text x="28" y="{90 + ch + 26}" class="l">Previous build{mv(summ_a)}</text>'
+                f'<image x="{48 + cw}" y="90" width="{cw}" height="{ch}" href="{b64(b_frames[k])}"/><text x="{48 + cw}" y="{90 + ch + 26}" class="l">This build{mv(summ_b)}</text>')
+        (tmp / f"f{k}.svg").write_text(svg(2 * cw + 76, 90 + ch + 50, body, f"In motion: frame {k + 1} of {n}, same camera, both builds",
+                                           f"{case} · {prev[-1].name} vs {cur[-1].name} · view 0, last frames, 4 frames apart"))
+        subprocess.run(["rsvg-convert", "-o", str(tmp / f"f{k}.png"), str(tmp / f"f{k}.svg")], capture_output=True)
+    if all((tmp / f"f{k}.png").is_file() for k in range(n)):
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-framerate", "2", "-i", str(tmp / "f%d.png"), "-vf",
+                        "scale=1400:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=128[p];[b][p]paletteuse", "-loop", "0", str(JOB / "motion.gif")],
+                       capture_output=True)
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-framerate", "2", "-i", str(tmp / "f%d.png"), "-vf", "scale=1400:-2",
+                        "-pix_fmt", "yuv420p", str(JOB / "motion.mp4")], capture_output=True)
+    if (JOB / "motion.gif").is_file():
+        made += ["motion.gif"] + (["motion.mp4"] if (JOB / "motion.mp4").is_file() else [])
+        facts.append(f"Animation: {n} frames of both builds in motion side by side{mv(summ_b).replace(' · ', '; this build ')}.")
 
 finish(f"Drew {len(made)} evidence chart(s) from this case's runs", facts or ["No runs with chartable data yet."], made, {"charts": made})
