@@ -1,0 +1,14 @@
+[Unit]
+Description=Romeo case service (write-ahead log, agent loop, HTTP on :8790)
+After=network-online.target docker.service
+
+[Service]
+User=dell
+WorkingDirectory=/opt/hack/Romeo
+EnvironmentFile=/opt/hack/Romeo/deploy/romeo.env
+ExecStart=/opt/hack/Romeo/build/romeo
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
