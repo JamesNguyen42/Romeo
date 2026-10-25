@@ -7,4 +7,6 @@ exec docker run -d --name ornith --restart unless-stopped --gpus all --shm-size 
   -v /opt/hack/models/Ornith-1.5-35B-A3B-NVFP4:/models/ornith35:ro vllm-b12x:c50aca /models/ornith35 \
   --served-model-name ornith-35b --linear-backend b12x --moe-backend b12x --tensor-parallel-size 1 \
   --max-model-len 8192 --max-num-seqs 4 --gpu-memory-utilization "${ORNITH_MEM:-0.35}" \
+  --reasoning-parser qwen3 \
+  --speculative-config "${ORNITH_SPEC:-{\"method\":\"mtp\",\"num_speculative_tokens\":2}}" \
   --host 0.0.0.0 --port 8000
