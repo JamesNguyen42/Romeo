@@ -1,0 +1,10 @@
+{
+  "name": "romeo-story",
+  "private": true,
+  "scripts": {
+    "start": "node ui/start-local.mjs"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

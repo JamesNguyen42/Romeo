@@ -1,36 +1,39 @@
 param(
-    [string]$Distro = 'Radiance-Ubuntu',
-    [int]$Port = 18790,
-    [string]$DataDirectory = '',
-    [string]$BuildDirectory = ''
+    [string]$Distro = $(if ($env:ROMEO_WSL_DISTRO) { $env:ROMEO_WSL_DISTRO } else { 'Radiance-Ubuntu' }),
+    [ValidateRange(1, 65535)]
+    [int]$Port = $(if ($env:ROMEO_PORT) { [int]$env:ROMEO_PORT } else { 18790 }),
+    [string]$DataDirectory = $env:ROMEO_DATA,
+    [string]$BuildDirectory = $env:ROMEO_BUILD_DIR
 )
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
-$url = "http://127.0.0.1:$Port"
-try {
-    $catalog = Invoke-RestMethod -Uri "$url/api/scenarios" -TimeoutSec 2
-    if ($null -ne $catalog.scenarios) {
-        Write-Host "Romeo is already running: $url"
-        return
-    }
-} catch {}
+Get-Command npm.cmd -ErrorAction Stop | Out-Null
+Get-Command wsl.exe -ErrorAction Stop | Out-Null
+
+# Always rebuild first. An existing listener must never make us skip new story markup.
 Push-Location $PSScriptRoot
 try {
-    & npm.cmd ci
-    if ($LASTEXITCODE -ne 0) { throw 'Installing UI dependencies failed. Close any running Vite dev server and retry if its files are in use.' }
     & npm.cmd run build
-    if ($LASTEXITCODE -ne 0) { throw 'Building the UI failed.' }
+    if ($LASTEXITCODE -ne 0) { throw 'Building the story UI failed.' }
 } finally { Pop-Location }
-$linuxRepoOutput = & wsl.exe -d $Distro --exec wslpath -a $repo.Replace('\', '/')
-if ($LASTEXITCODE -ne 0 -or -not $linuxRepoOutput) { throw 'The WSL repository path could not be resolved.' }
-$linuxRepo = $linuxRepoOutput.Trim()
-$logDirectory = Join-Path $repo 'runs\launcher'
-New-Item -ItemType Directory -Force -Path $logDirectory | Out-Null
+
+function Convert-ToWslPath([string]$Path) {
+    $converted = & wsl.exe -d $Distro --exec wslpath -a $Path.Replace('\', '/')
+    if ($LASTEXITCODE -ne 0 -or -not $converted) { throw "The WSL path could not be resolved: $Path" }
+    return ($converted | Out-String).Trim()
+}
+
+$linuxRepo = Convert-ToWslPath $repo
 $launcherArguments = @('-d', $Distro, '--exec', 'env', "ROMEO_PORT=$Port")
-if ($DataDirectory) { $launcherArguments += ('"ROMEO_DATA=' + $DataDirectory + '"') }
-if ($BuildDirectory) { $launcherArguments += ('"ROMEO_BUILD_DIR=' + $BuildDirectory + '"') }
-$launcherArguments += @('bash', ('"' + $linuxRepo + '/ui/start-local.sh"'))
-$process = Start-Process -FilePath 'wsl.exe' -ArgumentList $launcherArguments -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $logDirectory 'stdout.log') -RedirectStandardError (Join-Path $logDirectory 'stderr.log')
-$process.Id | Set-Content -LiteralPath (Join-Path $logDirectory 'wsl-process.pid')
-Write-Host "Building and starting Romeo in WSL. Open $url when ready."
-Write-Host "Startup logs: $logDirectory"
+if ($DataDirectory) {
+    if ($DataDirectory -match '^[A-Za-z]:[\\/]') { $DataDirectory = Convert-ToWslPath $DataDirectory }
+    $launcherArguments += "ROMEO_DATA=$DataDirectory"
+}
+if ($BuildDirectory) {
+    if ($BuildDirectory -match '^[A-Za-z]:[\\/]') { $BuildDirectory = Convert-ToWslPath $BuildDirectory }
+    $launcherArguments += "ROMEO_BUILD_DIR=$BuildDirectory"
+}
+$launcherArguments += @('bash', "$linuxRepo/ui/start-local.sh", '--ui-built')
+Write-Host "Starting the story UI and API in $Distro. Keep this terminal open; Ctrl+C stops the service."
+& wsl.exe @launcherArguments
+if ($LASTEXITCODE -ne 0) { throw "Romeo exited with code $LASTEXITCODE. See the message above." }

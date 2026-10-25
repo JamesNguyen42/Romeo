@@ -1,56 +1,76 @@
-# Romeo UI
+# Romeo story UI
 
-A live case board and visual story for Romeo's renderer. The page uses real run artifacts and one server-sent event connection. It includes a rotating wall view, canvas timing/memory charts, a 40-image replay for each comparison side, and an evidence drawer.
+The original Crosswalk Case Story layout, connected to Romeo's renderer and saved evidence. The frontend is assembled by a dependency-free Node build. Romeo's C++ server serves the page and its API together.
 
-## Run on Linux / the GB10
+## Start both with one command
 
-Use Node 22.12+ and a C++20 toolchain with CMake 3.25+, Ninja, and libcurl development headers.
-
-```sh
-cd ui
-npm ci
-npm run build
-cd ..
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build build --parallel 2
-ROMEO_UI=ui/dist ROMEO_RENDER=build/romeo-render ./build/romeo
-```
-
-Open `http://localhost:8790`. The backend serves the compiled UI. It is required; opening `index.html` from disk will not run tests. Rebuild the UI after source changes. Windows requires WSL for the C++ service.
-
-For this Windows workstation, `ui/start-local.ps1` builds the frontend and starts the C++ service in `Radiance-Ubuntu` on port 18790. Override `-Distro` or `-Port` as needed. It keeps startup logs in `runs/launcher` and reuses an already-running Romeo service on that port. The WSL distribution needs the build dependencies above. `ui/start-local.sh` is the equivalent service launcher on Linux after building the frontend.
-
-For frontend development against an already-running service:
+From the repository root:
 
 ```sh
-cd ui
-npm ci
-ROMEO_API=http://127.0.0.1:8790 npm run dev
+npm start
 ```
 
-In PowerShell, set `$env:ROMEO_API='http://127.0.0.1:8790'` before `npm run dev`. Vite proxies `/api`, including SSE, to that address. No fixtures are loaded automatically.
+Open `http://localhost:18790`. Keep the terminal open; Ctrl+C stops the service. The command rebuilds the story page and C++ programs before starting. No npm dependency installation is needed.
 
-## What the controls do
+Startup submits no cases, loads no fixtures and runs no tests. The default data directory is `runs/story-ui`, separate from earlier previews. A new directory starts empty; the story initially has no selected case. Existing directories are preserved. Reusing one restores its saved history and can continue work that was already requested.
 
-- **Run test** creates a new, durable comparison case. It executes the configured renderer with the scenario's intentional bug flags, then without them. Jobs run serially with a matched camera seed. This does not build a historical revision or assert a fix.
-- **40 rendered frames** displays either run's sampled camera frames, re-rendered after the benchmark and downsampled to 480×270. Their timing captions come from the original frame measurements across all cameras. PNG generation is excluded from benchmark statistics. Playback is a visual replay, not a camera feed.
-- **Test new angles** starts another comparison with a different, recorded camera seed. It creates new scene views, not a claim about any model's training data or a held-out classification dataset.
-- **Ask Romeo to investigate** uses the existing Clef/Ornith agent workflow. It needs the configured model services; revision-based cases also need the product repository used by `tools/build_rev`. No decision probabilities are invented when those services are unavailable. This workflow may use the configured script-tool catalog, so use an empty `ROMEO_TOOLS` directory for a measurement-only local environment.
-- **Cases** preserves previous runs. Case links use `#case=...` and survive refresh. No reset or deletion button is exposed.
-- **Wall** enters full screen and rotates through cases every 14 seconds. GPU data arrives on the same event stream; unavailable GPU readings are omitted.
+If the port is occupied, startup stops with an explanation after rebuilding. It does not kill or replace the existing service. Stop that service in its original terminal, or use another port and a separate data directory for a concurrent instance. The launcher locks its data directory for the service's lifetime; it refuses a second launcher using the same directory. No data is reset.
 
-The 40-frame warm-up is excluded from summary timing statistics and timing charts. The replay includes sampled warm-up frames with their recorded timings. Results reflect the current machine and workload. A failed render or missing model ends with a visible explanation; completing a comparison is not a diagnosis or verification of a code change.
+Windows PowerShell:
 
-## Checks
+```powershell
+$env:ROMEO_PORT = '18792'
+$env:ROMEO_DATA = 'runs/story-ui-18792'
+npm start
+```
+
+Linux:
 
 ```sh
-cd ui
-npm test
-npm run build
-cd ..
-ROMEO_RENDER=build/romeo-render python3 tests/renderer_preview_test.py -v
+ROMEO_PORT=18792 ROMEO_DATA=runs/story-ui-18792 npm start
 ```
 
-Backend API/WAL tests live in `backend/tests/`; see their header for the isolated-service command. Keep tests separate from a service containing runs you want to preserve.
+## Prerequisites
 
-The UI preserves the prototype's Archivo typeface and warm grey/red palette. Archivo is included under the SIL Open Font License in `public/fonts/OFL.txt`.
+- Node.js 22.12+ with npm.
+- Linux with a C++20 compiler, CMake 3.25+, Ninja, libcurl development headers, and `flock` from util-linux.
+- On Windows, WSL with those C++ dependencies. The default distribution is `Radiance-Ubuntu`; set `ROMEO_WSL_DISTRO` to choose another installed distribution. Node and npm run on Windows, so Node is not required inside WSL.
+
+For Ubuntu, install the build tools once:
+
+```sh
+sudo apt-get install build-essential cmake ninja-build libcurl4-openssl-dev util-linux
+```
+
+## Paths and options
+
+The default C++ build directory is `build/story-ui`. Set `ROMEO_BUILD_DIR` or `ROMEO_DATA` to use other locations. Choose a new data directory for an empty session; no previous directory is deleted or reset. The local launcher uses an empty script-tool directory by default.
+
+The platform launchers can also be called directly from the repository root:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File ui/start-local.ps1 -Port 18792 -DataDirectory runs/story-ui-18792
+```
+
+```sh
+bash ui/start-local.sh
+```
+
+PowerShell also accepts `-Distro`, `-DataDirectory`, and `-BuildDirectory`. Data/build paths can be Windows absolute paths or Linux paths. Linux accepts `ROMEO_PORT`, `ROMEO_DATA`, `ROMEO_BUILD_DIR`, and the backend's normal environment settings.
+
+To rebuild only the page, without starting a service or running a test:
+
+```sh
+npm --prefix ui run build
+```
+
+Renderer measurements and replay artifacts are documented in [JAMES3-API.md](../docs/JAMES3-API.md). Comparison measurements need no model service. Model-directed investigations additionally need the configured Clef/Ornith services and product revisions.
+
+## Original story source
+
+- `ui/story/template.html` contains the original layout, styles and visual story markup.
+- `ui/story/logic.js` binds that layout to the selected case and its live measurements.
+- `ui/story/live-data.js` reads events, case records and renderer artifacts. A new run is submitted only by a run control.
+- `ui/story/runtime.html` preserves the original bundled runtime and embedded assets.
+
+`ui/build.mjs` combines these sources into `ui/index.html` and `ui/dist/index.html`, with the font license alongside the served page. Edit the source files rather than those generated copies. Building produces page files; it does not start a backend, load case data or execute a renderer test.

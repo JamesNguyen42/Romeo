@@ -4,24 +4,15 @@ The UI runs the existing renderer and reads its measurements and images. It has 
 
 ## Build and start
 
-The C++ service uses POSIX APIs. Run it on Linux, macOS, or Windows through WSL, with CMake 3.25+, a C++20 compiler, Ninja, and libcurl development files installed. From the repository root:
+Install Node.js 22.12+ with npm, plus a Linux C++20 toolchain, CMake 3.25+, Ninja, libcurl development files and util-linux (`flock`). Windows uses WSL (`Radiance-Ubuntu` by default). From the repository root, one command builds the original story page and the C++ service, then serves the frontend and API together:
 
 ```sh
-cmake -S . -B build -G Ninja
-cmake --build build -j 4
-mkdir -p runs/comparison-tools
-ROMEO_PORT=8790 \
-ROMEO_DATA=runs/james3 \
-ROMEO_RENDER=build/romeo-render \
-ROMEO_CASES=cases/cases.json \
-ROMEO_UI=ui/dist \
-ROMEO_TOOLS=runs/comparison-tools \
-ROMEO_FRAMES=300 \
-ROMEO_THINK=0 \
-./build/romeo
+npm start
 ```
 
-Build the frontend as described in `ui/README.md`. The service serves its compiled `ui/dist` at `/`. The empty tools directory above keeps optional script tools out of this local preview. Use a new data directory to isolate a preview; previous runs remain in their original directories. Do not reset a shared service to start a new run.
+Open `http://localhost:18790` and keep the terminal open. Startup submits no cases or tests and loads no fixtures. It uses `runs/story-ui` for saved state and `build/story-ui` for binaries. A new data directory starts empty; an existing one keeps its history and previously requested work. The UI initially selects no case. An occupied port produces an error after rebuilding, without replacing that service.
+
+See `ui/README.md` for prerequisites and port/data/build overrides. For a concurrent instance, use both another port and a separate data directory, for example `ROMEO_PORT=18792 ROMEO_DATA=runs/story-ui-18792 npm start` on Linux; PowerShell users can set the corresponding environment variables before `npm start`. The launcher holds an exclusive lock on its data directory and refuses another launcher using it. No saved data is reset. The local launcher uses an empty script-tool directory by default. The service serves `ui/dist` at `/`, so a separate frontend server is unnecessary.
 
 The default model URLs are Clef at `http://127.0.0.1:8001/v1/systemone` and Ornith at `http://127.0.0.1:8000/v1/chat/completions`. Override them with `CLEF_URL` and `ORNITH_URL`. Comparison mode does not call either model. Investigation mode additionally needs the configured model services and, for revision-based scenarios, the product repository and refs used by `tools/build_rev` (`PRODUCT_DIR`, default `/opt/hack/product`).
 
