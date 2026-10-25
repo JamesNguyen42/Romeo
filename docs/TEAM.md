@@ -52,8 +52,8 @@ Work only inside your own folder. Everyone commits straight to `main`; the GB10 
 
 ## Machines and ports
 
-All services run on the GB10 (`promaxgb10-95c3.local`). Laptops reach it by joining the same phone hotspot; the venue
-Wi-Fi blocks laptop-to-laptop traffic.
+All services run on the GB10. Build and test on your laptop against `docs/sample-events.jsonl`; your code reaches
+the GB10 through `main` (auto-pull).
 
 | Port | Service |
 | --- | --- |
