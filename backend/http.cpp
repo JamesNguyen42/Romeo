@@ -717,6 +717,23 @@ static void handle(Service &s, Conn &conn, const Request &r) {
         emit(s, *c, "priority", [&](EventLine &e) { cat(e, "{\"by\":", json_string(by.substr(0, 63)), "}"); });
         return respond_json(conn, 200, "{\"priority\":true}");
     }
+    // A person closes a case: recorded as stopped in the log (nothing is deleted); its queued jobs are dropped.
+    if (post && path.substr(0, 11) == "/api/cases/" && path.size() > 17 && path.substr(path.size() - 6) == "/close") {
+        Case *c = find_case(store, path.substr(11, path.size() - 17));
+        if (!c) return respond_json(conn, 404, "{\"error\":\"no such case\"}");
+        yyjson_val *b = r.body.empty() ? nullptr : yyjson_doc_get_root(parse_json(s.request, r.body));
+        std::string_view by = json_str(b, "by");
+        const uint32_t index = uint32_t(c - store.cases.begin());
+        uint32_t kept = 0;
+        for (uint32_t i = 0; i < s.spawns->items.count; ++i)
+            if (s.spawns->items[i].case_index != index) s.spawns->items[kept++] = s.spawns->items[i];
+        s.spawns->items.count = kept;
+        emit(s, *c, "stopped", [&](EventLine &e) {
+            cat(e, "{\"reason\":", json_string(by.empty() ? std::string_view("Closed by a person.") : std::string_view("Closed by a person in chat.")),
+                ",\"missing\":\"\",\"closed_by\":", json_string(by.substr(0, 63)), "}");
+        });
+        return respond_json(conn, 200, "{\"closed\":true}");
+    }
     // Jobs waiting for the single job slot, in start order.
     if (!post && path == "/api/queue") {
         Body *out = body_in_arena(s);

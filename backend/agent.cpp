@@ -169,11 +169,12 @@ static bool start_job(Service &s, Case &c, const SpawnRequest &r) {
 }
 
 // A job process is running when its outbox file exists (it was started) and its exit file does not.
-int job_processes_running(const Service &s) {
+// which: 0 = all jobs, 1 = renderer jobs only, 2 = script tools only.
+static int count_running(const Service &s, int which) {
     int n = 0;
     for (const Case &c : s.store->cases)
         for (const Pending &p : c.pending) {
-            if (!p.job) continue;
+            if (!p.job || (which == 1 && p.script) || (which == 2 && !p.script)) continue;
             PathText outbox, exit_file;
             cat(outbox, s.cfg.data, "/outbox/", p.action_id, ".json");
             cat(exit_file, p.dir, "/exit");
@@ -182,15 +183,18 @@ int job_processes_running(const Service &s) {
     return n;
 }
 
-static bool job_process_running(const Service &s) { return job_processes_running(s) > 0; }
+int job_processes_running(const Service &s) { return count_running(s, 0); }
 
 void commit_iteration(Service &s) {
     wal_commit(*s.wal, [&](const WalRecord &r) { broadcast_committed(s, r); });
 
     // One job process at a time keeps frame-time measurements free of interference. Jobs that cannot start yet
     // stay queued in order; their action_requested records are already durable.
+    // Renderer measurements run one at a time so frame timings stay clean. Script tools (checks, fixes, pull
+    // requests) do not measure frame time, so up to kScriptSlots of them run alongside: several cases progress at once.
+    constexpr int kScriptSlots = 3;
     SpawnQueue &q = *s.spawns;
-    bool busy = job_process_running(s);
+    int renderers = count_running(s, 1), scripts = count_running(s, 2);
     // A case a person marked as priority goes first: move its first queued job to the front.
     for (uint32_t i = 1; i < q.items.count; ++i) {
         const SpawnRequest &r = q.items[i];
@@ -208,12 +212,13 @@ void commit_iteration(Service &s) {
         if (r.case_index >= s.store->cases.count) continue;
         Case &c = s.store->cases[r.case_index];
         if (c.generation != r.generation) continue;
-        if (busy) {
+        const bool slot_free = r.script ? scripts < kScriptSlots : renderers == 0;
+        if (!slot_free) {
             q.items[kept++] = r;
             continue;
         }
         if (start_job(s, c, r)) {
-            busy = true;
+            (r.script ? scripts : renderers) += 1;
         } else if (r.kind != "verify_fix") {
             FixedStringBuilder<256> text;
             cat(text, "Job ", r.action_id, " was already started once; not starting it again.");
