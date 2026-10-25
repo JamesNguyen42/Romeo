@@ -1,0 +1,142 @@
+#!/usr/bin/env python3
+"""Draw this case's evidence from its own runs: frame spikes, the thread timeline at the worst spike, memory over time,
+and a before/after render crop. Release (current) runs are compared with previous-build runs. Writes SVG and PNG."""
+import base64, csv, glob, json, os, struct, subprocess, sys, zlib
+from pathlib import Path
+sys.path.insert(0, os.path.dirname(__file__) + "/lib")
+from tool import INPUT, JOB, finish
+
+case = INPUT["case_id"]
+STYLE = ("<style>.t{font:700 22px Helvetica,Arial,sans-serif;fill:#111827}.s{font:14px Helvetica,Arial,sans-serif;fill:#4b5563}"
+         ".a{font:12px Menlo,monospace;fill:#6b7280}.l{font:600 13px Helvetica,Arial,sans-serif;fill:#1f2937}.g{stroke:#e5e7eb}</style>")
+
+
+def runs_with(name):
+    """This case's run directories that contain name, oldest first, split into (current, previous build)."""
+    cur, prev = [], []
+    for d in sorted(glob.glob(str(JOB.parent / f"{case}-*")), key=os.path.getmtime):
+        if not Path(d, name).is_file() or Path(d, name).stat().st_size < 40:
+            continue
+        inp = Path(d, "input.json")
+        stdout = Path(d, "stdout.txt").read_text()[:200] if Path(d, "stdout.txt").is_file() else ""
+        # Built-in renderer jobs have no input.json; their kind is recorded by the service in the outbox entry.
+        kind = ""
+        ob = JOB.parent.parent / "outbox" / (Path(d).name + ".json")
+        if ob.is_file():
+            kind = json.loads(ob.read_text().splitlines()[0]).get("kind", "")
+        if kind in ("measure_frames", "measure_memory", "capture_trace"):
+            cur.append(Path(d))
+        elif kind == "compare_baseline":
+            prev.append(Path(d))
+    return cur, prev
+
+
+def svg(w, h, body, title, sub):
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" width="{w}" height="{h}">{STYLE}'
+            f'<rect width="{w}" height="{h}" fill="#ffffff"/><text x="28" y="40" class="t">{title}</text><text x="28" y="64" class="s">{sub}</text>{body}</svg>')
+
+
+def save(name, text):
+    (JOB / f"{name}.svg").write_text(text)
+    subprocess.run(["rsvg-convert", "-z", "2", "-o", str(JOB / f"{name}.png"), str(JOB / f"{name}.svg")], capture_output=True)
+    return [f"{name}.png"] if (JOB / f"{name}.png").is_file() else [f"{name}.svg"]
+
+
+def series(path, col):
+    return [float(r[col]) for r in csv.DictReader(open(path))]
+
+
+made, facts = [], []
+
+# 1. Frame times: release vs previous build.
+cur, prev = runs_with("frames.csv")
+if cur:
+    c = series(cur[-1] / "frames.csv", "ms")
+    p = series(prev[-1] / "frames.csv", "ms") if prev else []
+    w, h, x0, y0, pw, ph = 1400, 520, 80, 90, 1280, 360
+    ymax = max(c + p) * 1.1
+    med = sorted(c[40:])[len(c[40:]) // 2] if len(c) > 40 else sorted(c)[len(c) // 2]
+    X = lambda i, n: x0 + pw * i / max(n - 1, 1)
+    Y = lambda v: y0 + ph - ph * v / ymax
+    b = "".join(f'<line class="g" x1="{x0}" x2="{x0 + pw}" y1="{Y(v):.1f}" y2="{Y(v):.1f}"/><text x="{x0 - 10}" y="{Y(v) + 4:.1f}" class="a" text-anchor="end">{v:.0f} ms</text>'
+                for v in [ymax * k / 4 for k in range(5)])
+    b += f'<line x1="{x0}" x2="{x0 + pw}" y1="{Y(2 * med):.1f}" y2="{Y(2 * med):.1f}" stroke="#b45309" stroke-dasharray="6 5"/>'
+    for s, col, lab in ((p, "#9ca3af", "previous build"), (c, "#0f766e", "this build")):
+        if s:
+            b += f'<polyline fill="none" stroke="{col}" stroke-width="1.8" points="{" ".join(f"{X(i, len(s)):.1f},{Y(v):.1f}" for i, v in enumerate(s))}"/>'
+    spikes = [(i, v) for i, v in enumerate(c) if i >= 40 and v > 2 * med]
+    b += "".join(f'<circle cx="{X(i, len(c)):.1f}" cy="{Y(v):.1f}" r="5" fill="#dc2626"/>' for i, v in spikes)
+    b += f'<text x="{x0}" y="{h - 30}" class="l" fill="#0f766e">— this build</text><text x="{x0 + 140}" y="{h - 30}" class="l" fill="#6b7280">— previous build</text><text x="{x0 + 320}" y="{h - 30}" class="l" fill="#b45309">- - spike line (2x median)</text>'
+    made += save("frames", svg(w, h, b, f"Frame time: {len(spikes)} spikes, worst {max(c):.0f} ms" + (f" (previous build worst {max(p):.0f} ms)" if p else ""),
+                               f"{case} · {cur[-1].name}" + (f" vs {prev[-1].name}" if prev else "") + f" · median {med:.1f} ms"))
+    facts.append(f"Chart: this build has {len(spikes)} frames over 2x the median (worst {max(c):.0f} ms)" + (f"; the previous build's worst frame is {max(p):.0f} ms." if p else "."))
+
+# 2. Thread timeline at the worst frame of the newest trace.
+tr = [d for d in runs_with("trace.json")[0]]
+if tr:
+    ev = json.load(open(tr[-1] / "trace.json"))["traceEvents"]
+    frames = [e for e in ev if e["name"] == "frame"]
+    if frames:
+        worst = max(frames, key=lambda e: e["dur"])
+        t0, t1 = worst["ts"] - 100_000, worst["ts"] + worst["dur"] + 100_000
+        tids = sorted({e["tid"] for e in ev})[:10]
+        names = {1: "render thread", 2: "asset loader"}
+        w, x0, y0, lh = 1400, 150, 90, 34
+        h = y0 + lh * len(tids) + 70
+        X = lambda t: x0 + (w - x0 - 30) * (t - t0) / (t1 - t0)
+        col = {"frame": "#e5e7eb", "wait_asset_lock": "#dc2626", "asset_read_parse": "#b45309", "raster_tiles": "#0f766e", "motion_blur": "#6366f1"}
+        b = ""
+        for i, tid in enumerate(tids):
+            y = y0 + i * lh
+            b += f'<text x="{x0 - 10}" y="{y + 21}" class="l" text-anchor="end">{names.get(tid, f"tile worker {tid - 3}")}</text>'
+            for e in sorted((e for e in ev if e["tid"] == tid and e["ts"] + e["dur"] > t0 and e["ts"] < t1), key=lambda e: e["name"] != "frame"):
+                xa, xb = X(max(e["ts"], t0)), X(min(e["ts"] + e["dur"], t1))
+                b += f'<rect x="{xa:.1f}" y="{y + 6}" width="{max(1.5, xb - xa):.1f}" height="{lh - 12}" rx="3" fill="{col.get(e["name"], "#9ca3af")}"/>'
+        waits = [e["dur"] / 1000 for e in ev if e["name"] == "wait_asset_lock" and t0 <= e["ts"] <= t1]
+        made += save("trace", svg(w, h, b, f"Inside the worst frame: {worst['dur'] / 1000:.0f} ms",
+                                  f"{case} · {tr[-1].name} · red: render thread waits on the asset lock · amber: asset loader file read · teal: tiles"))
+        facts.append(f"Chart: the worst frame is {worst['dur'] / 1000:.0f} ms" + (f"; the render thread waits {max(waits):.0f} ms on the asset lock inside it." if waits else "; no lock wait inside it."))
+
+# 3. Memory over time: release vs previous build.
+cur, prev = runs_with("memory.csv")
+if cur:
+    def mem(d):
+        return [(float(r["t_ms"]) / 1000, int(r["resident_bytes"]) / 2**20) for r in csv.DictReader(open(d / "memory.csv"))]
+    c = mem(cur[-1]); p = mem(prev[-1]) if prev else []
+    w, h, x0, y0, pw, ph = 1400, 480, 90, 90, 1260, 320
+    tmax = max(t for t, _ in c + p); mmax = max(m for _, m in c + p) * 1.15
+    X = lambda t: x0 + pw * t / max(tmax, 0.1); Y = lambda m: y0 + ph - ph * m / mmax
+    b = "".join(f'<line class="g" x1="{x0}" x2="{x0 + pw}" y1="{Y(v):.1f}" y2="{Y(v):.1f}"/><text x="{x0 - 10}" y="{Y(v) + 4:.1f}" class="a" text-anchor="end">{v:.0f} MiB</text>' for v in [mmax * k / 4 for k in range(5)])
+    for s, colr, lab in ((p, "#9ca3af", "previous build"), (c, "#dc2626", "this build")):
+        if s:
+            b += f'<polyline fill="none" stroke="{colr}" stroke-width="2.2" points="{" ".join(f"{X(t):.1f},{Y(m):.1f}" for t, m in s)}"/><text x="{X(s[-1][0]) - 6:.1f}" y="{Y(s[-1][1]) - 8:.1f}" class="l" text-anchor="end" fill="{colr}">{lab}: {s[-1][1]:.0f} MiB</text>'
+    made += save("memory", svg(w, h, b, f"Resident memory: {c[0][1]:.0f} → {c[-1][1]:.0f} MiB", f"{case} · {cur[-1].name}" + (f" vs {prev[-1].name}" if prev else "")))
+    facts.append(f"Chart: resident memory goes from {c[0][1]:.0f} to {c[-1][1]:.0f} MiB" + (f"; the previous build ends at {p[-1][1]:.0f} MiB." if p else "."))
+
+# 4. Render before/after/difference: the same crop of the last frame from both builds.
+cur, prev = runs_with("image.rgba")
+if cur and prev:
+    summ = json.load(open(cur[-1] / "summary.json")) if (cur[-1] / "summary.json").is_file() else {}
+    W, H = summ.get("width", 1920), summ.get("height", 1080)
+    cw, ch = min(640, W), min(420, H)
+    x, y = (W - cw) // 2, (H - ch) // 2
+    def crop(d):
+        raw = (d / "image.rgba").read_bytes()
+        return b"".join(raw[((y + r) * W + x) * 4:((y + r) * W + x + cw) * 4] for r in range(ch))
+    a, bb = crop(prev[-1]), crop(cur[-1])
+    diff = bytearray(len(a))
+    for i in range(0, len(a), 4):
+        dlt = min(255, 4 * max(abs(a[i] - bb[i]), abs(a[i + 1] - bb[i + 1]), abs(a[i + 2] - bb[i + 2])))
+        diff[i:i + 4] = bytes((dlt, dlt // 3, dlt // 4, 255))
+    def png(px):
+        rows = b"".join(b"\x00" + px[r * cw * 4:(r + 1) * cw * 4] for r in range(ch))
+        chunk = lambda t, dd: struct.pack(">I", len(dd)) + t + dd + struct.pack(">I", zlib.crc32(t + dd) & 0xffffffff)
+        return "data:image/png;base64," + base64.b64encode(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", cw, ch, 8, 6, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(rows, 6)) + chunk(b"IEND", b"")).decode()
+    w, h = 28 * 2 + cw * 3 + 40, 110 + ch + 50
+    body = "".join(f'<image x="{28 + k * (cw + 20)}" y="90" width="{cw}" height="{ch}" href="{png(px)}"/><text x="{28 + k * (cw + 20)}" y="{90 + ch + 26}" class="l">{lab}</text>'
+                   for k, (lab, px) in enumerate((("Previous build", a), ("This build", bb), ("Difference x4", bytes(diff)))))
+    extra = f" · motion-vector error {summ['mv_error_px']:.2f} px" if summ.get("mv_error_px") is not None else ""
+    made += save("render", svg(w, h, body, "Render: previous build vs this build", f"{case} · centre crop {cw}x{ch} of the last frame{extra}"))
+    facts.append("Chart: render crop of the previous build, this build and their difference" + (f" (motion-vector error {summ['mv_error_px']:.2f} px)." if extra else "."))
+
+finish(f"Drew {len(made)} evidence chart(s) from this case's runs", facts or ["No runs with chartable data yet."], made, {"charts": made})

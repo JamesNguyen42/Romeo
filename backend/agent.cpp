@@ -736,7 +736,8 @@ void on_case_call_done(Service &s, ModelCall &call, long http, CURLcode rc) {
         // Delivery after a supported diagnosis is a fixed pipeline, not a model choice:
         // regression check -> fix -> pull request -> verification run.
         ResolvedTool t;
-        if (resolve_tool(*s.scripts, "write_test", t)) execute(s, c, "write_test");
+        if (resolve_tool(*s.scripts, "visualize", t)) execute(s, c, "visualize");
+        else if (resolve_tool(*s.scripts, "write_test", t)) execute(s, c, "write_test");
         else start_verification(s, c);
     } else if (call.kind == CallKind::stop_note) {
         emit(s, c, "stopped", [&](EventLine &b) {
@@ -832,7 +833,8 @@ void agent_tick(Service &s) {
                 if (!c.def.comparison) request_thought(s, c);
                 if (c.concluded && !c.def.comparison) {
                     ResolvedTool t;
-                    if (p.kind == "write_test" && resolve_tool(*s.scripts, "write_fix", t)) execute(s, c, "write_fix");
+                    if (p.kind == "visualize" && resolve_tool(*s.scripts, "write_test", t)) execute(s, c, "write_test");
+                    else if (p.kind == "write_test" && resolve_tool(*s.scripts, "write_fix", t)) execute(s, c, "write_fix");
                     else if (p.kind == "write_fix" && !c.fix_rev.empty() && resolve_tool(*s.scripts, "open_pr", t)) execute(s, c, "open_pr");
                     else start_verification(s, c);
                 }

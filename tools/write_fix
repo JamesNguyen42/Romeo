@@ -32,6 +32,14 @@ for attempt in (1, 2):
         feedback = f"\nYour previous patch did not apply: {out[-600:]}\nProduce a patch against exactly the source shown."
         git("worktree", "remove", "--force", str(work), check=False)
         continue
+    charts = sorted(glob.glob(str(JOB.parent / f"{case}-*" / "*.png")))
+    charts = [c for c in charts if Path(c).name in ("frames.png", "trace.png", "memory.png", "render.png")]
+    if charts:  # the evidence charts ship with the fix, so the pull request shows them inline
+        import shutil
+        (work / "evidence" / case).mkdir(parents=True, exist_ok=True)
+        for c in charts:
+            shutil.copy(c, work / "evidence" / case / Path(c).name)
+        sh("git", "-C", str(work), "add", "evidence")
     if check:  # the regression check ships with the fix, so CI can run it without a model
         import shutil
         (work / "checks").mkdir(exist_ok=True)
