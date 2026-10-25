@@ -38,7 +38,10 @@ web = WebClient(token=os.environ["SLACK_BOT_TOKEN"])
 BOT_USER = web.auth_test()["user_id"]
 lock = threading.Lock()
 state = json.loads(STATE.read_text()) if STATE.exists() else {"threads": {}}
-state.setdefault("approvals", {})  # thread ts -> case id waiting for a person's "yes"
+state.setdefault("approvals", {})
+state.setdefault("cards", {})  # case id -> {"ts", "stage", "detail"}: one status card per case, edited in place
+
+STAGES = ["Investigating", "Diagnosis", "Regression check", "Fix", "Pull request", "Verify"]  # thread ts -> case id waiting for a person's "yes"
 REPO_URL = f"https://github.com/{PR_REPO}"
 chat_cases = set()  # cases opened from Slack: their thread is the reporter's message, saved by on_message
 
@@ -70,6 +73,40 @@ def post(case_id, text, broadcast=False):
             save()
             return
     web.chat_postMessage(channel=t["channel"], thread_ts=t["ts"], text=text, reply_broadcast=broadcast)
+
+
+def card_text(case_id, stage, detail, outcome=""):
+    marks = []
+    for i, name in enumerate(STAGES):
+        mark = ":white_check_mark:" if i < stage else (":hourglass_flowing_sand:" if i == stage and not outcome else ":white_square:")
+        if outcome and i <= stage:
+            mark = ":white_check_mark:" if outcome == "done" else (":octagonal_sign:" if i == stage else ":white_check_mark:")
+        marks.append(f"{mark} {name}")
+    head = f"*Juliette · {case_id}*" + (f" — *{outcome}*" if outcome else "")
+    return head + "\n" + "  →  ".join(marks) + (f"\n_{detail}_" if detail else "")
+
+
+def update_card(case_id, stage=None, detail="", outcome=""):
+    """Create or edit the case's status card at the top of its thread."""
+    with lock:
+        t = state["threads"].get(case_id)
+        card = state["cards"].get(case_id, {"stage": 0, "detail": ""})
+    if not t:
+        return
+    if stage is not None:
+        card["stage"] = max(card["stage"], stage)
+    card["detail"] = detail or card["detail"]
+    text = card_text(case_id, card["stage"], card["detail"], outcome)
+    try:
+        if card.get("ts"):
+            web.chat_update(channel=t["channel"], ts=card["ts"], text=text)
+        else:
+            card["ts"] = web.chat_postMessage(channel=t["channel"], thread_ts=t["ts"], text=text)["ts"]
+    except Exception as e:
+        print("card update failed:", type(e).__name__, flush=True)
+    with lock:
+        state["cards"][case_id] = card
+        save()
 
 
 def upload(case_id, artifact, title):
@@ -111,7 +148,7 @@ def on_message(event):
     try:
         route = api("POST", "/api/route", {"text": text, "channel": channel, "user": user, **({"case_id": known} if known else {})}, timeout=90)
     except Exception as e:
-        web.chat_postMessage(channel=channel, thread_ts=ts, text=f"Romeo could not reach the case service ({type(e).__name__}).")
+        web.chat_postMessage(channel=channel, thread_ts=ts, text=f"Juliette could not reach the case service ({type(e).__name__}).")
         return
     intent, action, p = route.get("intent"), route.get("action"), route.get("p", {})
     conf = p.get(intent, 0) if isinstance(p, dict) else 0
@@ -170,8 +207,23 @@ TOOL_WORDS = {"write_test": ":test_tube: *Wrote a regression check*", "write_fix
               "open_pr": ":rocket: *Opened a pull request*", "git_diff": ":mag: *Read the change under investigation*", "plot": ":chart_with_upwards_trend: *Drew a chart*"}
 
 
+STAGE_OF_TOOL = {"write_test": 2, "write_fix": 3, "open_pr": 4}
+
+
 def on_event(e):
     cid, typ, d = e.get("case"), e.get("type"), e.get("data", {})
+    try:
+        if typ == "decision":
+            update_card(cid, 0, f"Clef chose {d.get('chosen')} (p={d.get('candidates', [{}])[0].get('p', 0):.2f})")
+        elif typ == "action_requested":
+            kind = d.get("kind", "")
+            update_card(cid, STAGE_OF_TOOL.get(kind, 5 if kind == "verify_fix" else None), f"running: {d.get('label', kind)}")
+        elif typ == "conclusion":
+            update_card(cid, 2 if d.get("supported", True) else 1, "diagnosis: " + d.get("diagnosis", "")[:200])
+        elif typ in ("done", "stopped"):
+            update_card(cid, 5 if typ == "done" else None, d.get("summary", d.get("reason", ""))[:200], outcome=typ)
+    except Exception as ex:
+        print("card failed:", type(ex).__name__, flush=True)
     if typ == "case_opened" and d.get("channel"):
         chat_cases.add(cid)
     elif typ == "case_opened" and cid not in state["threads"]:
