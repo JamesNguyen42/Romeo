@@ -1,0 +1,7 @@
+build/
+*.o
+__pycache__/
+.venv/
+runs/
+.DS_Store
+.env

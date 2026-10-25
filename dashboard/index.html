@@ -1,0 +1,1321 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Romeo · live</title>
+<style>
+:root {
+  --bg: #030508;
+  --panel-a: #0a0f16;
+  --panel-b: #070a0f;
+  --line: #172130;
+  --line-2: #223044;
+  --text: #e6edf5;
+  --dim: #8592a5;
+  --faint: #465264;
+  --clef: #2dd4bf;
+  --ornith: #a78bfa;
+  --job: #fbbf24;
+  --hw: #7dd3fc;
+  --inv: #3b82f6;
+  --wait: #f59e0b;
+  --done: #22c55e;
+  --stop: #6b7280;
+  --bad: #fb7185;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", "DejaVu Sans Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Inter, "DejaVu Sans", "Liberation Sans", Roboto, sans-serif;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+[hidden] { display: none !important; }
+html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font-family: var(--sans); }
+body { -webkit-font-smoothing: antialiased; }
+.mono, b, .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+/* The stage is laid out at exactly 1920x1080 and scaled to fit other screens. */
+#stage {
+  position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; transform-origin: 0 0;
+  display: grid; gap: 12px; padding: 14px;
+  grid-template-columns: 420px 680px 1fr;
+  grid-template-rows: 84px 1fr 300px;
+  grid-template-areas: "top top top" "hw models ops" "bottom bottom bottom";
+  background:
+    radial-gradient(1200px 600px at 50% -10%, rgba(56, 189, 248, 0.07), transparent 70%),
+    radial-gradient(900px 500px at 100% 110%, rgba(167, 139, 250, 0.05), transparent 70%),
+    linear-gradient(rgba(255,255,255,0.016) 1px, transparent 1px) 0 0 / 40px 40px,
+    linear-gradient(90deg, rgba(255,255,255,0.016) 1px, transparent 1px) 0 0 / 40px 40px,
+    var(--bg);
+}
+.panel {
+  --acc: #334155;
+  position: relative; overflow: hidden; contain: layout paint;
+  background: linear-gradient(180deg, var(--panel-a), var(--panel-b));
+  border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.03), 0 0 0 1px rgba(0,0,0,0.4);
+}
+.panel::before {
+  content: ""; position: absolute; left: 0; right: 0; top: 0; height: 2px;
+  background: linear-gradient(90deg, var(--acc), transparent 75%); opacity: 0.9;
+}
+.ph {
+  display: flex; align-items: center; gap: 10px; height: 34px; padding: 0 16px;
+  font: 700 13px/1 var(--sans); letter-spacing: 0.18em; text-transform: uppercase; color: var(--dim);
+  white-space: nowrap;
+}
+.ph .name { color: var(--acc); }
+.ph .tag {
+  font: 600 11px/1 var(--mono); letter-spacing: 0.06em; text-transform: none; color: var(--dim);
+  border: 1px solid var(--line-2); border-radius: 4px; padding: 4px 6px;
+}
+.ph .sp { flex: 1; }
+.ph .rt { font: 600 13px/1 var(--mono); letter-spacing: 0.02em; text-transform: none; color: var(--dim); overflow: hidden; text-overflow: ellipsis; }
+.col { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+canvas { display: block; width: 100%; height: 100%; }
+.lbl { font: 700 11px/1 var(--sans); letter-spacing: 0.16em; text-transform: uppercase; color: var(--faint); }
+.big { display: flex; align-items: baseline; gap: 6px; white-space: nowrap; }
+.big b { font-size: 40px; font-weight: 700; line-height: 1; color: var(--text); letter-spacing: -0.02em; }
+.big u { text-decoration: none; font: 600 16px/1 var(--mono); color: var(--dim); }
+
+/* ---------- top bar ---------- */
+#top { grid-area: top; display: flex; align-items: center; padding: 0 22px; gap: 28px; --acc: var(--hw); }
+.brand { display: flex; align-items: baseline; gap: 14px; white-space: nowrap; }
+.brand .logo { font: 800 38px/1 var(--sans); letter-spacing: 0.22em; color: #f8fafc; text-shadow: 0 0 24px rgba(125, 211, 252, 0.35); }
+.brand .dot { font: 700 30px/1 var(--sans); color: var(--hw); }
+.brand .sub { font: 500 20px/1 var(--sans); color: var(--dim); letter-spacing: 0.02em; }
+.counters { display: flex; gap: 12px; margin-left: auto; }
+.ctr {
+  --c: var(--text);
+  display: flex; align-items: center; gap: 12px; height: 60px; padding: 0 18px 0 14px; min-width: 178px;
+  border: 1px solid var(--line-2); border-radius: 8px; background: rgba(255,255,255,0.015);
+  border-left: 4px solid var(--c);
+}
+.ctr b { display: inline-block; font-size: 44px; font-weight: 700; line-height: 1; color: var(--c); min-width: 1.3ch; text-align: right; }
+.ctr span { font: 700 12px/1.2 var(--sans); letter-spacing: 0.16em; text-transform: uppercase; color: var(--dim); }
+.ctr.inv { --c: var(--inv); } .ctr.wait { --c: var(--wait); } .ctr.done { --c: var(--done); } .ctr.stop { --c: #9ca3af; }
+.topr { display: flex; align-items: center; gap: 22px; }
+.conn { display: flex; align-items: center; gap: 8px; font: 700 13px/1 var(--mono); letter-spacing: 0.12em; color: var(--wait); text-transform: uppercase; white-space: nowrap; }
+.conn i { width: 10px; height: 10px; border-radius: 50%; background: currentColor; box-shadow: 0 0 10px currentColor; animation: pulse 1.2s ease-in-out infinite; }
+.conn.up { color: var(--done); }
+.conn.up i { animation-duration: 2.4s; }
+#clock { font: 700 36px/1 var(--mono); color: #f1f5f9; letter-spacing: 0.02em; }
+#date { font: 600 12px/1 var(--mono); color: var(--dim); letter-spacing: 0.14em; margin-top: 6px; text-align: right; }
+
+/* ---------- hardware ---------- */
+#hw { grid-area: hw; }
+#p-gpu { --acc: var(--hw); flex: 0 0 318px; display: flex; flex-direction: column; }
+.gpu-top { display: flex; height: 190px; padding: 0 12px 0 4px; }
+.gauge-box { flex: 0 0 214px; height: 190px; }
+.gstats { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 18px; padding-left: 6px; }
+.gstats .lbl { margin-bottom: 8px; }
+.spark-box { position: relative; flex: 1; margin: 2px 14px 12px; border-top: 1px solid var(--line); padding-top: 6px; min-height: 0; }
+.spark-box .lbl { position: absolute; left: 0; top: 10px; }
+.spark-box .lbl.r { left: auto; right: 0; }
+.spark-box canvas { height: 100%; }
+#p-mem { --acc: var(--hw); flex: 0 0 112px; }
+.mem-body { padding: 2px 16px 0; }
+.bar { position: relative; height: 16px; margin-top: 12px; border-radius: 4px; background: #0f1722; border: 1px solid var(--line); overflow: hidden; }
+.bar > i { position: absolute; inset: 0; transform-origin: 0 50%; transform: scaleX(0); transition: transform 0.8s cubic-bezier(.2,.8,.2,1);
+  background: linear-gradient(90deg, #0ea5e9, var(--hw)); box-shadow: 0 0 16px rgba(125,211,252,0.45); }
+.bar::after { content: ""; position: absolute; inset: 0; background: repeating-linear-gradient(90deg, transparent 0 39px, rgba(3,5,8,0.6) 39px 40px); }
+#p-jobs { --acc: var(--job); flex: 1; min-height: 0; }
+.jobs-body { display: flex; align-items: center; gap: 18px; padding: 4px 16px 0; }
+#jobs-n { font-size: 64px; font-weight: 800; line-height: 1; color: var(--job); text-shadow: 0 0 22px rgba(251,191,36,0.35); }
+.jobs-cap { font: 600 15px/1.35 var(--sans); color: var(--dim); }
+.scan { position: relative; height: 3px; margin: 12px 16px 8px; background: #141b26; border-radius: 2px; overflow: hidden; }
+.scan i { position: absolute; top: 0; bottom: 0; width: 30%; background: linear-gradient(90deg, transparent, var(--job), transparent); transform: translateX(-100%); opacity: 0; }
+.scan.on i { opacity: 1; animation: scan 1.6s linear infinite; }
+#jobs-list { list-style: none; padding: 0 16px; }
+#jobs-list li { display: flex; gap: 10px; font: 500 14px/1.6 var(--sans); color: var(--text); white-space: nowrap; overflow: hidden; }
+#jobs-list li .c { font: 600 13px/1.75 var(--mono); color: var(--job); flex: 0 0 auto; }
+#jobs-list li .t { overflow: hidden; text-overflow: ellipsis; color: var(--dim); }
+
+/* ---------- models ---------- */
+#models { grid-area: models; }
+#p-clef { --acc: var(--clef); flex: 0 0 292px; display: flex; flex-direction: column; }
+#p-orn { --acc: var(--ornith); flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.mstats { display: flex; gap: 26px; padding: 2px 16px 0; height: 70px; align-items: center; }
+.mstats .lbl { margin-bottom: 8px; }
+.mstats .hero b { font-size: 48px; }
+#p-clef .hero b { color: var(--clef); text-shadow: 0 0 22px rgba(45,212,191,0.3); }
+#p-orn .hero b { color: var(--ornith); text-shadow: 0 0 22px rgba(167,139,250,0.3); }
+.mstats .big b { font-size: 34px; }
+.ctxline { height: 24px; padding: 0 16px; font: 500 14px/24px var(--sans); color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ctxline b { font-size: 13px; color: var(--text); }
+.bars-box { flex: 1; min-height: 0; padding: 2px 16px 12px; }
+.tok-box { position: relative; height: 70px; margin: 2px 16px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.tok-box .lbl { position: absolute; left: 0; top: 7px; }
+.tok-box .lbl.r { left: auto; right: 0; }
+.thought { flex: 1; min-height: 0; padding: 10px 16px 12px; contain: strict; overflow: hidden; }
+.thought .lbl { display: block; margin-bottom: 8px; }
+.thought .lbl .m { color: var(--ornith); }
+#th-main { font: 500 18px/1.42 var(--sans); color: #ede9fe; max-height: 103px; overflow: hidden; }
+.caret { display: inline-block; width: 9px; height: 19px; margin-left: 2px; vertical-align: -3px; background: var(--ornith); animation: blink 0.9s steps(1) infinite; }
+.caret.off { display: none; }
+#th-reason { margin-top: 8px; font: 400 13px/1.4 var(--sans); color: #6b6585; max-height: 56px; overflow: hidden; opacity: 0; transition: opacity 0.8s ease; }
+#th-reason.show { opacity: 1; }
+#th-reason::before { content: "reasoning  "; font: 700 10px/1 var(--sans); letter-spacing: 0.16em; text-transform: uppercase; color: #4d4766; }
+.offline { position: absolute; inset: 34px 0 0 0; display: none; align-items: center; justify-content: center; flex-direction: column; gap: 10px;
+  background: rgba(4,6,10,0.78); }
+.offline b { font: 800 40px/1 var(--mono); letter-spacing: 0.3em; color: var(--stop); }
+.offline span { font: 500 15px/1 var(--sans); color: var(--faint); }
+#p-orn.down .offline { display: flex; }
+.state { font: 700 11px/1 var(--mono); letter-spacing: 0.12em; padding: 4px 7px; border-radius: 4px; color: var(--done); border: 1px solid rgba(34,197,94,0.4); }
+.state.off { color: var(--stop); border-color: var(--line-2); }
+
+/* ---------- cases and ticker ---------- */
+#ops { grid-area: ops; }
+#p-cases { flex: 0 1 auto; max-height: 384px; display: flex; flex-direction: column; }
+#case-list { padding: 0 10px 8px; overflow: hidden; }
+.case {
+  --s: var(--inv);
+  display: grid; grid-template-columns: 92px 30px 1fr auto auto; align-items: center; gap: 12px;
+  min-height: 32px; padding: 3px 8px; border-radius: 6px; border-bottom: 1px solid rgba(23,33,48,0.7);
+}
+.case .cid { font: 700 15px/1 var(--mono); color: var(--text); }
+.case .chip { width: 26px; height: 22px; border-radius: 4px; display: grid; place-items: center; font: 800 13px/1 var(--mono); color: #cbd5e1; background: #162030; border: 1px solid var(--line-2); }
+.case .ct { min-width: 0; }
+.case .title { font: 500 16px/1.25 var(--sans); color: #d6dde8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.case .wf { display: none; font: 500 13px/1.3 var(--sans); color: var(--wait); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.case .evn { font: 500 12px/1 var(--mono); color: var(--faint); }
+.pill { display: inline-flex; align-items: center; gap: 7px; height: 24px; padding: 0 10px; border-radius: 12px; min-width: 128px; justify-content: center;
+  font: 700 11px/1 var(--sans); letter-spacing: 0.14em; text-transform: uppercase; color: var(--s);
+  background: color-mix(in srgb, var(--s) 14%, transparent); border: 1px solid color-mix(in srgb, var(--s) 45%, transparent); }
+.pill i { width: 7px; height: 7px; border-radius: 50%; background: var(--s); }
+.case.s-waiting { --s: var(--wait); }
+.case.s-waiting .wf { display: block; }
+.case.s-waiting .pill i { box-shadow: 0 0 8px var(--wait); animation: pulse 1s ease-in-out infinite; }
+.case.s-done { --s: var(--done); }
+.case.s-stopped { --s: #9ca3af; }
+.case.s-stopped .title, .case.s-stopped .cid { color: #7c8594; }
+#case-list.dense .case { min-height: 26px; padding: 1px 8px; }
+#case-list.dense .case .title { font-size: 14px; }
+#p-ticker { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+#ticker { flex: 1; min-height: 0; overflow: hidden; padding: 0 10px 8px; }
+.tk { --c: var(--text); display: grid; grid-template-columns: 76px 104px 78px 1fr; gap: 10px; align-items: center; height: 22px;
+  font: 500 14px/22px var(--sans); white-space: nowrap; padding: 0 6px; border-radius: 4px; }
+.tk .tt { font: 500 12px/22px var(--mono); color: var(--faint); }
+.tk .tg { font: 700 11px/22px var(--sans); letter-spacing: 0.12em; color: var(--c); overflow: hidden; }
+.tk .tg em { font-style: normal; display: inline-block; width: 18px; text-align: center; margin-right: 4px; font-size: 13px; }
+.tk .tc { font: 600 12px/22px var(--mono); color: var(--dim); overflow: hidden; text-overflow: ellipsis; }
+.tk .tx { overflow: hidden; text-overflow: ellipsis; color: #c3cbd8; }
+
+/* ---------- bottom strip ---------- */
+#bottom { grid-area: bottom; display: grid; grid-template-columns: 1fr 1000px; gap: 12px; min-height: 0; }
+#p-frames { --acc: var(--job); display: flex; flex-direction: column; }
+#p-img { --acc: var(--bad); display: flex; flex-direction: column; }
+.fstats { display: flex; gap: 8px; }
+.fchip { font: 600 12px/1 var(--mono); padding: 5px 8px; border-radius: 4px; border: 1px solid var(--line-2); color: var(--dim); letter-spacing: 0; text-transform: none; }
+.fchip b { color: var(--text); font-size: 13px; }
+.fchip.red { border-color: rgba(251,113,133,0.5); }
+.fchip.red b { color: var(--bad); }
+.fsum { height: 20px; padding: 0 16px; font: 500 13px/20px var(--sans); color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chart-box { flex: 1; min-height: 0; padding: 0 12px 8px 4px; position: relative; }
+.empty { position: absolute; inset: 34px 0 0 0; display: flex; align-items: center; justify-content: center; font: 500 16px/1 var(--sans); color: var(--faint); letter-spacing: 0.04em; }
+#imgs { flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; padding: 4px 14px 12px; }
+#imgs[data-n="1"] { grid-template-columns: 1fr; }
+#imgs[data-n="2"] { grid-template-columns: repeat(2, 1fr); }
+#imgs figure { display: flex; flex-direction: column; min-width: 0; min-height: 0; gap: 7px; }
+#imgs .fr { flex: 1; min-height: 0; border: 1px solid var(--line-2); border-radius: 6px; background: #000; overflow: hidden; position: relative; }
+#imgs .fr img { width: 100%; height: 100%; object-fit: contain; display: block; }
+#imgs figure.diff .fr { border-color: rgba(251,113,133,0.55); box-shadow: 0 0 18px rgba(251,113,133,0.18); }
+#imgs figure.err .fr::after { content: "image unavailable"; position: absolute; inset: 0; display: grid; place-items: center; color: var(--faint); font: 500 13px/1 var(--sans); }
+#imgs figcaption { display: flex; gap: 10px; align-items: baseline; white-space: nowrap; overflow: hidden; }
+#imgs figcaption b { font: 700 12px/1 var(--sans); letter-spacing: 0.16em; text-transform: uppercase; color: var(--text); }
+#imgs figure.diff figcaption b { color: var(--bad); }
+#imgs figcaption span { font: 500 11px/1 var(--mono); color: var(--faint); overflow: hidden; text-overflow: ellipsis; }
+
+/* ---------- overlays ---------- */
+#banner {
+  position: absolute; left: 0; right: 0; top: 0; height: 104px; z-index: 10;
+  display: flex; align-items: center; justify-content: center; gap: 20px;
+  background: linear-gradient(90deg, rgba(14,165,233,0.96), rgba(45,212,191,0.96));
+  color: #02131a; font: 800 34px/1 var(--sans); letter-spacing: 0.01em;
+  box-shadow: 0 10px 50px rgba(45,212,191,0.35);
+  transform: translateY(-115%); transition: transform 0.5s cubic-bezier(.2,.8,.2,1);
+}
+#banner.show { transform: translateY(0); }
+#banner .bi { font-size: 44px; display: inline-block; animation: spin 1.4s linear infinite; }
+#connecting { position: absolute; inset: 0; z-index: 9; display: flex; align-items: center; justify-content: center; background: rgba(3,5,8,0.62); opacity: 0; transition: opacity 0.4s; pointer-events: none; }
+#connecting.show { opacity: 1; }
+#connecting .card { padding: 28px 44px; border: 1px solid var(--line-2); border-radius: 12px; background: #080c12; text-align: center; }
+#connecting .card b { display: block; font: 700 40px/1 var(--mono); color: var(--wait); animation: pulse 1.4s ease-in-out infinite; }
+#connecting .card span { display: block; margin-top: 14px; font: 500 15px/1 var(--mono); color: var(--dim); }
+
+@keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.35; transform: scale(0.8); } }
+@keyframes blink { 50% { opacity: 0; } }
+@keyframes scan { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
+@keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div id="stage">
+  <header id="top" class="panel">
+    <div class="brand"><span class="logo">ROMEO</span><span class="dot">·</span><span class="sub">always-on engineering agent</span></div>
+    <div class="counters">
+      <div class="ctr inv"><b id="c-inv">0</b><span>investigating</span></div>
+      <div class="ctr wait"><b id="c-wait">0</b><span>waiting</span></div>
+      <div class="ctr done"><b id="c-done">0</b><span>done</span></div>
+      <div class="ctr stop"><b id="c-stop">0</b><span>stopped</span></div>
+    </div>
+    <div class="topr">
+      <div id="conn" class="conn"><i></i><span id="conn-t">connecting…</span></div>
+      <div><div id="clock">--:--:--</div><div id="date"></div></div>
+    </div>
+  </header>
+
+  <section id="hw" class="col">
+    <div id="p-gpu" class="panel">
+      <div class="ph"><span class="name">GPU</span><span class="tag">GB10</span><span class="sp"></span><span class="rt" id="gpu-clock">— MHz</span></div>
+      <div class="gpu-top">
+        <div class="gauge-box"><canvas id="gauge"></canvas></div>
+        <div class="gstats">
+          <div><div class="lbl">power</div><div class="big"><b id="gpu-power">—</b><u>W</u></div></div>
+          <div><div class="lbl">temperature</div><div class="big"><b id="gpu-temp">—</b><u>°C</u></div></div>
+        </div>
+      </div>
+      <div class="spark-box"><canvas id="spark-gpu"></canvas><span class="lbl">utilization · last 2 min</span><span class="lbl r">100%</span></div>
+    </div>
+    <div id="p-mem" class="panel">
+      <div class="ph"><span class="name">Unified memory</span><span class="sp"></span><span class="rt" id="mem-pct">—</span></div>
+      <div class="mem-body">
+        <div class="big"><b id="mem-used">—</b><u>/ <span id="mem-total">—</span> GB used</u></div>
+        <div class="bar"><i id="mem-fill"></i></div>
+      </div>
+    </div>
+    <div id="p-jobs" class="panel">
+      <div class="ph"><span class="name">Renderer jobs</span><span class="sp"></span><span class="rt" id="jobs-pend"></span></div>
+      <div class="jobs-body"><b id="jobs-n">0</b><div class="jobs-cap">running<br>on this machine</div></div>
+      <div class="scan" id="jobs-scan"><i></i></div>
+      <ul id="jobs-list"></ul>
+    </div>
+  </section>
+
+  <section id="models" class="col">
+    <div id="p-clef" class="panel">
+      <div class="ph"><span class="name">Clef</span><span class="tag">clef-flash</span><span>next-action choice</span><span class="sp"></span><span class="rt" id="clef-last"></span></div>
+      <div class="mstats">
+        <div class="hero"><div class="lbl">decisions</div><div class="big"><b id="clef-n">—</b></div></div>
+        <div><div class="lbl">mean latency</div><div class="big"><b id="clef-ms">—</b><u>ms</u></div></div>
+      </div>
+      <div class="ctxline" id="clef-ctx">waiting for the first decision…</div>
+      <div class="bars-box"><canvas id="clef-bars"></canvas></div>
+    </div>
+    <div id="p-orn" class="panel">
+      <div class="ph"><span class="name">Ornith</span><span class="tag">ornith-35b</span><span>reasoning</span><span class="sp"></span><span class="state off" id="orn-state">—</span></div>
+      <div class="mstats">
+        <div class="hero"><div class="lbl">generation</div><div class="big"><b id="orn-tps">—</b><u>tok/s</u></div></div>
+        <div><div class="lbl">requests</div><div class="big"><b id="orn-req">—</b></div></div>
+        <div><div class="lbl">MTP accept</div><div class="big"><b id="orn-mtp">—</b><u>%</u></div></div>
+        <div><div class="lbl">KV cache</div><div class="big"><b id="orn-kv">—</b><u>%</u></div></div>
+      </div>
+      <div class="tok-box"><canvas id="spark-tok"></canvas><span class="lbl">tokens/s · last 2 min</span><span class="lbl r" id="tok-max"></span></div>
+      <div class="thought">
+        <span class="lbl">latest thought · <span class="m" id="th-ctx">none yet</span></span>
+        <div id="th-main"><span id="th-text"></span><span class="caret off" id="th-caret"></span></div>
+        <div id="th-reason"></div>
+      </div>
+      <div class="offline"><b>OFFLINE</b><span>model server is not answering</span></div>
+    </div>
+  </section>
+
+  <section id="ops" class="col">
+    <div id="p-cases" class="panel">
+      <div class="ph"><span class="name">Case board</span><span class="sp"></span><span class="rt" id="cases-n">0 cases</span></div>
+      <div id="case-list"></div>
+    </div>
+    <div id="p-ticker" class="panel">
+      <div class="ph"><span class="name">Live events</span><span class="sp"></span><span class="rt" id="ev-n"></span></div>
+      <div id="ticker"></div>
+    </div>
+  </section>
+
+  <section id="bottom">
+    <div id="p-frames" class="panel">
+      <div class="ph"><span class="name">Frame time</span><span class="rt" id="fr-ctx"></span><span class="sp"></span>
+        <span class="fstats">
+          <span class="fchip">frames <b id="fs-n">—</b></span>
+          <span class="fchip">median <b id="fs-med">—</b></span>
+          <span class="fchip">p99 <b id="fs-p99">—</b></span>
+          <span class="fchip">worst <b id="fs-max">—</b></span>
+          <span class="fchip red">spikes <b id="fs-sp">—</b></span>
+        </span>
+      </div>
+      <div class="fsum" id="fr-sum"></div>
+      <div class="chart-box"><canvas id="frames"></canvas></div>
+      <div class="empty" id="fr-empty">waiting for the first render run…</div>
+    </div>
+    <div id="p-img" class="panel">
+      <div class="ph"><span class="name">Render compare</span><span class="sp"></span><span class="rt" id="img-ctx"></span></div>
+      <div id="imgs" data-n="3">
+        <figure hidden><div class="fr"><img alt="" decoding="async"></div><figcaption><b></b><span></span></figcaption></figure>
+        <figure hidden><div class="fr"><img alt="" decoding="async"></div><figcaption><b></b><span></span></figcaption></figure>
+        <figure hidden><div class="fr"><img alt="" decoding="async"></div><figcaption><b></b><span></span></figcaption></figure>
+      </div>
+      <div class="empty" id="img-empty">no rendered image yet</div>
+    </div>
+  </section>
+
+  <div id="banner"><span class="bi">↻</span><span id="banner-t"></span></div>
+  <div id="connecting" class="show"><div class="card"><b>connecting…</b><span id="conn-target"></span></div></div>
+</div>
+
+<script>
+(() => {
+'use strict';
+
+// ------------------------------------------------------------------ setup
+const params = new URLSearchParams(location.search);
+const BASE = (params.get('api') || '').replace(/\/+$/, '');
+const api = (p) => BASE + p;
+const $ = (id) => document.getElementById(id);
+
+const MONO = 'ui-monospace, "SF Mono", "JetBrains Mono", "DejaVu Sans Mono", Menlo, Consolas, "Liberation Mono", monospace';
+const SANS = 'system-ui, -apple-system, "Segoe UI", Inter, "DejaVu Sans", "Liberation Sans", Roboto, sans-serif';
+const C = { clef: '#2dd4bf', ornith: '#a78bfa', job: '#fbbf24', hw: '#7dd3fc', bad: '#fb7185', text: '#e6edf5', dim: '#8592a5', faint: '#465264' };
+const WINDOW_MS = 120000;
+
+const num = (x) => (typeof x === 'number' && isFinite(x)) ? x : (typeof x === 'string' && x !== '' && isFinite(+x) ? +x : null);
+const str = (x) => (x == null ? '' : String(x));
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const easeOut = (t) => 1 - Math.pow(1 - t, 3);
+const fix = (x, d) => { const v = num(x); return v == null ? '—' : v.toFixed(d); };
+const oneLine = (s) => str(s).replace(/\s+/g, ' ').trim();
+const clip = (s, n) => (s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s);
+const pretty = (k) => str(k).replace(/_/g, ' ');
+
+// Write text only when it changes, so steady values cause no DOM work.
+function setText(el, s) { s = str(s); if (el._t !== s) { el._t = s; el.textContent = s; } }
+function bump(el, s) {
+  s = str(s);
+  if (el._t === s) return;
+  const had = el._t !== undefined && el._t !== '—';
+  setText(el, s);
+  if (had && el.animate) el.animate([{ transform: 'scale(1.22)', filter: 'brightness(1.9)' }, { transform: 'scale(1)', filter: 'none' }], { duration: 650, easing: 'cubic-bezier(.2,.8,.2,1)' });
+}
+const pad2 = (n) => (n < 10 ? '0' : '') + n;
+const hms = (d) => pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds());
+const DAYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+
+function artUrl(caseId, art) {
+  return api('/api/artifacts/' + encodeURIComponent(caseId) + '/' + str(art).split('/').map(encodeURIComponent).join('/'));
+}
+
+async function fetchWith(path, timeout, kind) {
+  const ctl = new AbortController();
+  const tm = setTimeout(() => ctl.abort(), timeout);
+  try {
+    const r = await fetch(path.startsWith('http') ? path : api(path), { signal: ctl.signal, cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return kind === 'text' ? await r.text() : await r.json();
+  } finally { clearTimeout(tm); }
+}
+
+// ------------------------------------------------------------------ stage scaling and canvases
+const stage = $('stage');
+let stageScale = 1;
+const surfaces = [];
+const ro = new ResizeObserver((entries) => {
+  for (const e of entries) {
+    const o = surfaces.find((s) => s.c === e.target);
+    if (!o) continue;
+    o.w = e.contentRect.width; o.h = e.contentRect.height;
+    sizeSurface(o);
+  }
+});
+function surface(id) {
+  const c = $(id);
+  const o = { c, ctx: c.getContext('2d'), w: 0, h: 0, r: 1, dirty: true };
+  surfaces.push(o); ro.observe(c);
+  return o;
+}
+function sizeSurface(o) {
+  const r = (window.devicePixelRatio || 1) * stageScale;
+  const bw = Math.max(1, Math.round(o.w * r)), bh = Math.max(1, Math.round(o.h * r));
+  if (o.c.width !== bw || o.c.height !== bh) { o.c.width = bw; o.c.height = bh; }
+  o.r = r; o.dirty = true; o.grad = null;
+}
+function begin(o) {
+  if (!o.w || !o.h) return null;
+  const ctx = o.ctx;
+  ctx.setTransform(o.r, 0, 0, o.r, 0, 0);
+  ctx.clearRect(0, 0, o.w, o.h);
+  return ctx;
+}
+function fitStage() {
+  const s = Math.min(window.innerWidth / 1920, window.innerHeight / 1080);
+  stageScale = s;
+  const x = (window.innerWidth - 1920 * s) / 2, y = (window.innerHeight - 1080 * s) / 2;
+  stage.style.transform = 'translate(' + x + 'px,' + y + 'px) scale(' + s + ')';
+  for (const o of surfaces) sizeSurface(o);
+}
+window.addEventListener('resize', fitStage);
+
+const gGauge = surface('gauge');
+const gSparkGpu = surface('spark-gpu');
+const gSparkTok = surface('spark-tok');
+const gBars = surface('clef-bars');
+const gFrames = surface('frames');
+fitStage();
+
+function roundRect(ctx, x, y, w, h, r) {
+  r = Math.max(0, Math.min(r, w / 2, h / 2));
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+const fitCache = new Map();
+function fitText(ctx, s, maxW) {
+  const k = ctx.font + '|' + maxW + '|' + s;
+  let v = fitCache.get(k);
+  if (v !== undefined) return v;
+  v = s;
+  if (ctx.measureText(s).width > maxW) {
+    let lo = 0, hi = s.length;
+    while (lo < hi) { const m = (lo + hi + 1) >> 1; if (ctx.measureText(s.slice(0, m) + '…').width <= maxW) lo = m; else hi = m - 1; }
+    v = s.slice(0, lo).trimEnd() + '…';
+  }
+  if (fitCache.size > 400) fitCache.clear();
+  fitCache.set(k, v);
+  return v;
+}
+function niceStep(range, count) {
+  const raw = range / Math.max(1, count);
+  const mag = Math.pow(10, Math.floor(Math.log10(raw || 1)));
+  const f = raw / mag;
+  return (f < 1.5 ? 1 : f < 3 ? 2 : f < 7 ? 5 : 10) * mag;
+}
+
+// ------------------------------------------------------------------ state
+const S = {
+  sys: null, prev: null,
+  sysUp: false, streamUp: false, everUp: false,
+  clockOffset: 0,
+  gpuSeries: [], tokSeries: [],
+  gaugeV: 0, gaugeT: 0, gaugeKnown: false,
+  tokScale: 20,
+  genRate: null, mtp: null,
+  seen: new Map(),
+  pendingJobs: new Map(),
+  jobsDirty: true,
+  decision: null,
+  thought: null,
+  frames: { want: null, prevWant: null, key: '', loading: false, data: null, ghost: null, t0: 0 },
+  byCaseFrames: new Map(),
+  cmp: null, cmpKey: '',
+  cases: [],
+  ticks: [],
+  evCount: 0,
+};
+
+const el = {
+  cInv: $('c-inv'), cWait: $('c-wait'), cDone: $('c-done'), cStop: $('c-stop'),
+  conn: $('conn'), connT: $('conn-t'), connecting: $('connecting'), clock: $('clock'), date: $('date'),
+  gpuPower: $('gpu-power'), gpuTemp: $('gpu-temp'), gpuClock: $('gpu-clock'),
+  memUsed: $('mem-used'), memTotal: $('mem-total'), memPct: $('mem-pct'), memFill: $('mem-fill'),
+  jobsN: $('jobs-n'), jobsScan: $('jobs-scan'), jobsList: $('jobs-list'), jobsPend: $('jobs-pend'),
+  clefN: $('clef-n'), clefMs: $('clef-ms'), clefCtx: $('clef-ctx'), clefLast: $('clef-last'),
+  ornPanel: $('p-orn'), ornState: $('orn-state'), ornTps: $('orn-tps'), ornReq: $('orn-req'), ornMtp: $('orn-mtp'), ornKv: $('orn-kv'), tokMax: $('tok-max'),
+  thCtx: $('th-ctx'), thText: $('th-text'), thCaret: $('th-caret'), thReason: $('th-reason'),
+  caseList: $('case-list'), casesN: $('cases-n'), ticker: $('ticker'), evN: $('ev-n'),
+  frCtx: $('fr-ctx'), frSum: $('fr-sum'), frEmpty: $('fr-empty'),
+  fsN: $('fs-n'), fsMed: $('fs-med'), fsP99: $('fs-p99'), fsMax: $('fs-max'), fsSp: $('fs-sp'),
+  imgs: $('imgs'), imgCtx: $('img-ctx'), imgEmpty: $('img-empty'),
+  banner: $('banner'), bannerT: $('banner-t'),
+};
+setText($('conn-target'), BASE || location.origin);
+
+function refreshConn() {
+  const up = S.sysUp && S.streamUp;
+  el.conn.classList.toggle('up', up);
+  setText(el.connT, up ? 'live' : 'connecting…');
+  el.connecting.classList.toggle('show', !S.sysUp && !S.streamUp);
+}
+
+// ------------------------------------------------------------------ /api/system, once per second
+function pushSeries(arr, t, v) {
+  arr.push({ t, v });
+  while (arr.length && arr[0].t < t - WINDOW_MS - 3000) arr.shift();
+}
+
+function onSystem(s) {
+  const now = performance.now();
+  const p = S.prev;
+  const tms = num(s.t_ms);
+  if (tms != null) S.clockOffset = tms - Date.now();
+
+  // Hardware
+  const util = num(s.gpu_util_pct);
+  if (util != null) { S.gaugeT = clamp(util, 0, 100); S.gaugeKnown = true; }
+  pushSeries(S.gpuSeries, now, util);
+  setText(el.gpuPower, fix(s.gpu_power_w, 1));
+  setText(el.gpuTemp, fix(s.gpu_temp_c, 0));
+  setText(el.gpuClock, fix(s.gpu_clock_mhz, 0) + ' MHz');
+  const mu = num(s.mem_used_gb), mt = num(s.mem_total_gb);
+  setText(el.memUsed, fix(mu, 1));
+  setText(el.memTotal, fix(mt, 1));
+  const frac = mu != null && mt ? clamp(mu / mt, 0, 1) : 0;
+  setText(el.memPct, mu != null && mt ? Math.round(frac * 100) + '%' : '—');
+  const fs = 'scaleX(' + frac.toFixed(4) + ')';
+  if (el.memFill._tf !== fs) { el.memFill._tf = fs; el.memFill.style.transform = fs; }
+
+  // Case totals
+  const cs = s.cases || {};
+  bump(el.cInv, num(cs.investigating) ?? 0);
+  bump(el.cWait, num(cs.waiting) ?? 0);
+  bump(el.cDone, num(cs.done) ?? 0);
+  bump(el.cStop, num(cs.stopped) ?? 0);
+
+  // Renderer jobs
+  const jobs = num(s.running_jobs) ?? 0;
+  bump(el.jobsN, jobs);
+  el.jobsScan.classList.toggle('on', jobs > 0);
+
+  // Clef
+  const clef = s.clef || {};
+  bump(el.clefN, num(clef.decisions) ?? 0);
+  setText(el.clefMs, fix(clef.mean_ms, 0));
+
+  // Ornith: counters are cumulative, so rates come from consecutive samples.
+  const o = s.ornith || {};
+  const up = !!o.up;
+  el.ornPanel.classList.toggle('down', !up);
+  setText(el.ornState, up ? 'ONLINE' : 'OFFLINE');
+  el.ornState.classList.toggle('off', !up);
+  let rate = null;
+  if (up && p && p.ornith && p.ornith.up) {
+    let dt = (tms != null && num(p.t_ms) != null) ? (tms - p.t_ms) / 1000 : 0;
+    if (!(dt > 0.05)) dt = (now - p._local) / 1000;
+    const dg = (num(o.generation_tokens_total) ?? 0) - (num(p.ornith.generation_tokens_total) ?? 0);
+    if (dt > 0 && dg >= 0) rate = dg / dt;
+    const dd = (num(o.spec_draft_tokens_total) ?? 0) - (num(p.ornith.spec_draft_tokens_total) ?? 0);
+    const da = (num(o.spec_accepted_tokens_total) ?? 0) - (num(p.ornith.spec_accepted_tokens_total) ?? 0);
+    if (dd > 0 && da >= 0) S.mtp = clamp(da / dd, 0, 1);
+  }
+  S.genRate = rate;
+  pushSeries(S.tokSeries, now, up ? rate : null);
+  setText(el.ornTps, rate == null ? '—' : rate < 100 ? rate.toFixed(1) : rate.toFixed(0));
+  setText(el.ornReq, up ? fix(o.requests_running, 0) : '—');
+  setText(el.ornMtp, up && S.mtp != null ? (S.mtp * 100).toFixed(0) : '—');
+  const kv = num(o.kv_cache_usage);
+  const kvPct = kv == null ? null : (kv <= 1 ? kv * 100 : kv);
+  setText(el.ornKv, up && kvPct != null ? kvPct.toFixed(kvPct < 10 ? 1 : 0) : '—');
+
+  s._local = now;
+  S.prev = s;
+  S.sys = s;
+  S.jobsDirty = true;
+}
+
+async function pollSystem() {
+  const t0 = performance.now();
+  let ok = false;
+  try { onSystem(await fetchWith('/api/system', 1800)); ok = true; } catch (e) { /* retried below */ }
+  if (ok !== S.sysUp) { S.sysUp = ok; refreshConn(); }
+  if (ok) S.everUp = true;
+  else if (S.prev) S.prev = null; // do not compute a rate across an outage
+  setTimeout(pollSystem, ok ? Math.max(0, 1000 - (performance.now() - t0)) : 2000);
+}
+
+// ------------------------------------------------------------------ case board
+const rows = new Map();
+function makeRow() {
+  const r = { el: document.createElement('div') };
+  r.el.className = 'case s-investigating';
+  r.cid = document.createElement('span'); r.cid.className = 'cid';
+  r.chip = document.createElement('span'); r.chip.className = 'chip';
+  const ct = document.createElement('div'); ct.className = 'ct';
+  r.title = document.createElement('div'); r.title.className = 'title';
+  r.wf = document.createElement('div'); r.wf.className = 'wf';
+  ct.append(r.title, r.wf);
+  r.evn = document.createElement('span'); r.evn.className = 'evn';
+  r.pill = document.createElement('span'); r.pill.className = 'pill';
+  const dot = document.createElement('i');
+  r.pillT = document.createElement('span');
+  r.pill.append(dot, r.pillT);
+  r.el.append(r.cid, r.chip, ct, r.evn, r.pill);
+  r.st = 'investigating';
+  setText(r.pillT, 'investigating');
+  return r;
+}
+const STATUSES = ['investigating', 'waiting', 'done', 'stopped'];
+function applyCases(list) {
+  if (!Array.isArray(list)) return;
+  S.cases = list;
+  const ids = new Set();
+  list.forEach((c, i) => {
+    const id = str(c.id);
+    ids.add(id);
+    let r = rows.get(id);
+    if (!r) { r = makeRow(); rows.set(id, r); }
+    if (el.caseList.children[i] !== r.el) el.caseList.insertBefore(r.el, el.caseList.children[i] || null);
+    setText(r.cid, id);
+    setText(r.chip, (str(c.setup) || '?').charAt(0).toUpperCase());
+    setText(r.title, oneLine(c.title) || '(untitled)');
+    const st = STATUSES.includes(c.status) ? c.status : 'investigating';
+    if (r.st !== st) { r.st = st; r.el.className = 'case s-' + st; setText(r.pillT, st); }
+    setText(r.wf, st === 'waiting' ? '⏵ waiting for ' + (oneLine(c.waiting_for) || 'an action') : '');
+    const n = num(c.event_count);
+    setText(r.evn, n == null ? '' : n + ' ev');
+  });
+  for (const [id, r] of rows) if (!ids.has(id)) { r.el.remove(); rows.delete(id); }
+  el.caseList.classList.toggle('dense', list.length > 10);
+  setText(el.casesN, list.length + (list.length === 1 ? ' case' : ' cases'));
+  // Forget pending jobs of cases that no longer exist (for example after a reset).
+  for (const [k, j] of S.pendingJobs) if (!ids.has(j.case)) { S.pendingJobs.delete(k); S.jobsDirty = true; }
+}
+function flashCase(id) {
+  const r = rows.get(str(id));
+  if (r && r.el.animate) r.el.animate([{ backgroundColor: 'rgba(125,211,252,0.16)' }, { backgroundColor: 'rgba(125,211,252,0)' }], { duration: 1100, easing: 'ease-out' });
+}
+let casesTimer = 0;
+function scheduleCases() {
+  if (casesTimer) return;
+  casesTimer = setTimeout(async () => {
+    casesTimer = 0;
+    try { applyCases(normalizeCases(await fetchWith('/api/cases', 3000))); } catch (e) { /* the next event or reconnect retries */ }
+  }, 250);
+}
+const normalizeCases = (x) => (Array.isArray(x) ? x : (x && Array.isArray(x.cases) ? x.cases : []));
+
+// ------------------------------------------------------------------ live event ticker
+const TYPES = {
+  case_opened:      { g: '◉', tag: 'OPEN',    c: '#60a5fa' },
+  decision:         { g: '◆', tag: 'DECIDE',  c: C.clef },
+  action_requested: { g: '▶', tag: 'ACTION',  c: C.job },
+  action_result:    { g: '■', tag: 'RESULT',  c: '#fcd34d' },
+  fact:             { g: '●', tag: 'FACT',    c: '#cbd5e1' },
+  thought:          { g: '✦', tag: 'THINK',   c: C.ornith },
+  conclusion:       { g: '★', tag: 'CAUSE',   c: '#34d399' },
+  restarted:        { g: '↻', tag: 'RESTART', c: C.hw },
+  stopped:          { g: '■', tag: 'STOPPED', c: '#9ca3af' },
+  done:             { g: '✔', tag: 'DONE',    c: '#22c55e' },
+};
+const TICK_MAX = 14;
+function candLabel(cands, key) {
+  const c = (cands || []).find((x) => x && x.action === key);
+  return oneLine(c && c.label) || pretty(key);
+}
+function tickText(ev) {
+  const d = ev.data || {};
+  switch (ev.type) {
+    case 'case_opened': return oneLine(d.title) + (d.setup ? '  · setup ' + str(d.setup) : '');
+    case 'decision': {
+      const c = (d.candidates || []).find((x) => x && x.action === d.chosen);
+      const p = c ? num(c.p) : null;
+      return 'chose ' + candLabel(d.candidates, d.chosen) + (p != null ? '  p=' + p.toFixed(2) : '') + (num(d.inference_ms) != null ? '  · ' + num(d.inference_ms).toFixed(0) + ' ms' : '');
+    }
+    case 'action_requested': return oneLine(d.label) || pretty(d.kind) || str(d.action_id);
+    case 'action_result': return (d.source === 'fixture' ? '[fixture] ' : '') + (oneLine(d.summary) || str(d.action_id));
+    case 'fact': return oneLine(d.text);
+    case 'thought': return oneLine(d.text) || oneLine(d.reasoning);
+    case 'conclusion': return oneLine(d.diagnosis);
+    case 'restarted': { const n = Array.isArray(d.pending) ? d.pending.length : 0; return 'resumed ' + n + ' pending action' + (n === 1 ? '' : 's'); }
+    case 'stopped': return oneLine(d.reason) + (d.missing ? '  · missing: ' + oneLine(d.missing) : '');
+    case 'done': return oneLine(d.summary) || 'verified';
+    default: return oneLine(JSON.stringify(d)).slice(0, 160);
+  }
+}
+function makeTick(ev) {
+  const t = TYPES[ev.type] || { g: '·', tag: str(ev.type).toUpperCase().slice(0, 8), c: C.dim };
+  const row = document.createElement('div');
+  row.className = 'tk';
+  row.style.setProperty('--c', t.c);
+  const tt = document.createElement('span'); tt.className = 'tt';
+  const tm = num(ev.t_ms);
+  tt.textContent = tm != null ? hms(new Date(tm - S.clockOffset)) : '';
+  const tg = document.createElement('span'); tg.className = 'tg';
+  const g = document.createElement('em'); g.textContent = t.g + '︎';
+  tg.append(g, document.createTextNode(t.tag));
+  const tc = document.createElement('span'); tc.className = 'tc'; tc.textContent = str(ev.case);
+  const tx = document.createElement('span'); tx.className = 'tx'; tx.textContent = clip(tickText(ev), 220);
+  row.append(tt, tg, tc, tx);
+  return row;
+}
+function tickerAdd(ev, animate) {
+  S.ticks.unshift(ev);
+  if (S.ticks.length > TICK_MAX) S.ticks.length = TICK_MAX;
+  if (!animate) return;
+  const row = makeTick(ev);
+  el.ticker.insertBefore(row, el.ticker.firstChild);
+  while (el.ticker.children.length > TICK_MAX) el.ticker.lastChild.remove();
+  if (row.animate) {
+    row.animate([{ opacity: 0, transform: 'translateX(-14px)', backgroundColor: 'rgba(255,255,255,0.10)' },
+                 { opacity: 1, transform: 'none', backgroundColor: 'rgba(255,255,255,0)' }], { duration: 700, easing: 'cubic-bezier(.2,.8,.2,1)' });
+  }
+}
+function rebuildTicker() {
+  const frag = document.createDocumentFragment();
+  for (const ev of S.ticks) frag.appendChild(makeTick(ev));
+  el.ticker.textContent = '';
+  el.ticker.appendChild(frag);
+}
+
+// ------------------------------------------------------------------ event handling
+function evKey(ev) { return str(ev.case) + '|' + str(ev.seq) + '|' + str(ev.t_ms); }
+function markSeen(ev) {
+  const k = evKey(ev);
+  if (S.seen.has(k)) return false;
+  S.seen.set(k, 1);
+  if (S.seen.size > 50000) { const it = S.seen.keys(); for (let i = 0; i < 10000; i++) S.seen.delete(it.next().value); }
+  return true;
+}
+const byTime = (a, b) => ((num(a.t_ms) ?? 0) - (num(b.t_ms) ?? 0)) || ((num(a.seq) ?? 0) - (num(b.seq) ?? 0));
+
+function setDecision(ev) {
+  const d = ev.data || {};
+  const cands = (Array.isArray(d.candidates) ? d.candidates : [])
+    .filter((c) => c && typeof c === 'object')
+    .map((c) => ({ action: str(c.action), label: oneLine(c.label) || pretty(c.action), p: clamp(num(c.p) ?? 0, 0, 1) }))
+    .sort((a, b) => b.p - a.p);
+  let shown = cands.slice(0, 5);
+  const ch = cands.find((c) => c.action === d.chosen);
+  if (ch && !shown.includes(ch)) shown[shown.length - 1] = ch;
+  S.decision = { t: num(ev.t_ms) ?? 0, rows: shown, chosen: str(d.chosen), t0: performance.now() };
+  gBars.dirty = true;
+  const ms = num(d.inference_ms);
+  setText(el.clefLast, ms != null ? 'last ' + ms.toFixed(0) + ' ms' : '');
+  setText(el.clefCtx, 'latest decision · ' + str(ev.case) + ' · chose ' + (ch ? ch.label : pretty(d.chosen) || 'nothing'));
+}
+
+function setThought(ev) {
+  const d = ev.data || {};
+  const text = clip(oneLine(d.text), 300);
+  const reason = clip(oneLine(d.reasoning), 260);
+  S.thought = { t: num(ev.t_ms) ?? 0, text: text || reason, reason: text ? reason : '', t0: performance.now(), shown: -1, done: false };
+  setText(el.thCtx, str(ev.case) + ' · ' + (str(d.model) || 'ornith-35b'));
+  el.thText.textContent = ''; el.thText._t = undefined;
+  setText(el.thReason, S.thought.reason);
+  el.thReason.classList.remove('show');
+  el.thCaret.classList.remove('off');
+}
+
+function considerArtifacts(ev) {
+  const d = ev.data || {};
+  const arts = (Array.isArray(d.artifacts) ? d.artifacts : []).filter((a) => typeof a === 'string');
+  const t = num(ev.t_ms) ?? 0;
+  const cid = str(ev.case);
+  const fr = arts.find((a) => /(^|\/)frames\.csv$/.test(a));
+  if (fr) {
+    const info = { case: cid, art: fr, t, action: str(d.action_id), source: str(d.source), summary: oneLine(d.summary) };
+    const list = S.byCaseFrames.get(cid) || [];
+    list.push(info);
+    if (list.length > 4) list.shift();
+    S.byCaseFrames.set(cid, list);
+    if (!S.frames.want || t >= S.frames.want.t) {
+      S.frames.want = info;
+      S.frames.prevWant = list.length > 1 ? list[list.length - 2] : null;
+    }
+  }
+  const diff = arts.find((a) => /(^|\/)diff\.png$/.test(a));
+  const imgs = arts.filter((a) => /(^|\/)image\.png$/.test(a));
+  if (diff) {
+    if (!S.cmp || S.cmp.kind !== 'compare' || t >= S.cmp.t) {
+      const labels = imgs.length >= 2 ? ['previous build', 'current build'] : ['current build'];
+      const items = imgs.slice(0, 2).map((a, i) => ({ art: a, label: labels[i] || 'image', diff: false }));
+      items.push({ art: diff, label: 'pixel difference', diff: true });
+      S.cmp = { kind: 'compare', case: cid, t, items, action: str(d.action_id) };
+    }
+  } else if (imgs.length && (!S.cmp || (S.cmp.kind === 'single' && t >= S.cmp.t))) {
+    S.cmp = { kind: 'single', case: cid, t, items: [{ art: imgs[0], label: 'latest render', diff: false }], action: str(d.action_id) };
+  }
+}
+
+// Restart banner. Several cases emit "restarted" together; their counts add up.
+let bannerTimer = 0, bannerN = 0, bannerOn = false;
+function showRestart(n) {
+  bannerN = bannerOn ? bannerN + n : n;
+  bannerOn = true;
+  setText(el.bannerT, 'Service restarted — resumed ' + bannerN + ' pending action' + (bannerN === 1 ? '' : 's') + ', none run twice');
+  el.banner.classList.add('show');
+  clearTimeout(bannerTimer);
+  bannerTimer = setTimeout(() => { el.banner.classList.remove('show'); bannerOn = false; }, 4000);
+}
+
+// mode: 'init' = first backfill, 'catchup' = backfill after a reconnect, 'live' = stream
+function applyEvent(ev, mode, animateTick) {
+  if (!ev || typeof ev !== 'object' || !ev.type) return;
+  const d = ev.data || {};
+  const t = num(ev.t_ms) ?? 0;
+  switch (ev.type) {
+    case 'decision': if (!S.decision || t >= S.decision.t) setDecision(ev); break;
+    case 'thought': if (!S.thought || t >= S.thought.t) setThought(ev); break;
+    case 'action_requested':
+      if (d.job === true || (d.job === undefined && d.dir)) { S.pendingJobs.set(str(d.action_id), { case: str(ev.case), label: oneLine(d.label) || pretty(d.kind), t }); S.jobsDirty = true; }
+      break;
+    case 'action_result':
+      if (S.pendingJobs.delete(str(d.action_id))) S.jobsDirty = true;
+      considerArtifacts(ev);
+      break;
+    case 'restarted': {
+      const n = Array.isArray(d.pending) ? d.pending.length : 0;
+      const serverNow = Date.now() + S.clockOffset;
+      if (mode !== 'init' || serverNow - t < 20000) showRestart(n);
+      break;
+    }
+  }
+  S.evCount++;
+  tickerAdd(ev, animateTick);
+  if (mode === 'live') flashCase(ev.case);
+}
+
+function afterEvents() {
+  setText(el.evN, S.evCount + ' events');
+  syncFrames();
+  renderImages();
+}
+
+// ------------------------------------------------------------------ stream and backfill
+let es = null, esTimer = 0, session = 0, firstLoad = true;
+
+async function backfill(my) {
+  const list = normalizeCases(await fetchWith('/api/cases', 4000));
+  if (my !== session) return;
+  applyCases(list);
+  const details = await Promise.all(list.map((c) => fetchWith('/api/cases/' + encodeURIComponent(str(c.id)), 6000).catch(() => null)));
+  if (my !== session) return;
+  const evs = [];
+  for (const det of details) {
+    if (!det || !Array.isArray(det.events)) continue;
+    for (const e of det.events) if (e && typeof e === 'object') { if (!e.case) e.case = det.id; evs.push(e); }
+  }
+  evs.sort(byTime);
+  const fresh = evs.filter(markSeen);
+  const mode = firstLoad ? 'init' : 'catchup';
+  firstLoad = false;
+  const animate = mode === 'catchup' && fresh.length <= 4;
+  for (const e of fresh) applyEvent(e, mode, animate);
+  if (!animate) rebuildTicker();
+  afterEvents();
+}
+
+function connectStream() {
+  clearTimeout(esTimer);
+  if (es) { es.onopen = es.onmessage = es.onerror = null; es.close(); es = null; }
+  const my = ++session;
+  const buffer = [];
+  let ready = false;
+
+  const fail = () => {
+    if (my !== session) return;
+    session++;
+    if (es) { es.onopen = es.onmessage = es.onerror = null; es.close(); es = null; }
+    if (S.streamUp) { S.streamUp = false; refreshConn(); }
+    esTimer = setTimeout(connectStream, 2000);
+  };
+
+  let src;
+  try { src = new EventSource(api('/api/stream')); } catch (e) { esTimer = setTimeout(connectStream, 2000); return; }
+  es = src;
+  src.onopen = () => {
+    if (my !== session) return;
+    S.streamUp = true; S.everUp = true; refreshConn();
+    // Events that arrive during the backfill are held, then applied in order without duplicates.
+    backfill(my).then(() => {
+      if (my !== session) return;
+      ready = true;
+      buffer.sort(byTime);
+      for (const ev of buffer) if (markSeen(ev)) applyEvent(ev, 'live', true);
+      buffer.length = 0;
+      afterEvents();
+      scheduleCases();
+    }).catch(fail);
+  };
+  src.onmessage = (m) => {
+    if (my !== session) return;
+    let ev;
+    try { ev = JSON.parse(m.data); } catch (e) { return; }
+    if (!ev || typeof ev !== 'object') return;
+    if (!ready) { if (buffer.length < 5000) buffer.push(ev); return; }
+    if (!markSeen(ev)) return;
+    applyEvent(ev, 'live', true);
+    afterEvents();
+    scheduleCases();
+  };
+  src.onerror = fail;
+}
+
+// ------------------------------------------------------------------ frame-time artifact
+function parseFrames(text) {
+  const lines = text.split(/\r?\n/);
+  const head = lines[0].split(',').map((h) => h.trim().toLowerCase());
+  let col = head.indexOf('ms');
+  let start = 1;
+  if (col < 0) { if (isFinite(parseFloat(head[head.length - 1]))) { start = 0; } col = head.length - 1; }
+  const ms = [];
+  for (let i = start; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line) continue;
+    const v = parseFloat(line.split(',')[col]);
+    if (isFinite(v)) ms.push(v);
+  }
+  if (!ms.length) return null;
+  const sorted = ms.slice().sort((a, b) => a - b);
+  const n = sorted.length;
+  const med = n % 2 ? sorted[(n - 1) >> 1] : (sorted[n / 2 - 1] + sorted[n / 2]) / 2;
+  const thr = 2 * med;
+  let spikes = 0;
+  for (const v of ms) if (v > thr) spikes++;
+  return { ms, med, thr, p99: sorted[Math.min(n - 1, Math.floor(0.99 * (n - 1)))], max: sorted[n - 1], spikes };
+}
+
+async function loadFrames(info) {
+  return parseFrames(await fetchWith(artUrl(info.case, info.art), 8000, 'text'));
+}
+
+async function syncFrames() {
+  const F = S.frames;
+  const w = F.want, pw = F.prevWant;
+  if (!w || F.loading) return;
+  const key = w.case + '|' + w.art + '|' + w.t;
+  if (key === F.key) return;
+  F.loading = true;
+  let data = null, ghost = null;
+  try { data = await loadFrames(w); } catch (e) { data = null; }
+  if (pw && pw.case === w.case) { try { ghost = await loadFrames(pw); } catch (e) { ghost = null; } }
+  F.loading = false;
+  F.key = key;
+  F.data = data; F.ghost = ghost; F.info = w; F.ghostInfo = ghost ? pw : null;
+  F.t0 = performance.now();
+  gFrames.dirty = true;
+  el.frEmpty.hidden = !!data;
+  if (!data) setText(el.frEmpty, 'frames.csv for ' + w.action + ' is not available');
+  setText(el.frCtx, w.case + ' · ' + w.action + (w.source ? ' · ' + w.source : ''));
+  setText(el.frSum, w.summary + (ghost ? '   (grey: earlier run ' + pw.action + ')' : ''));
+  setText(el.fsN, data ? data.ms.length : '—');
+  setText(el.fsMed, data ? data.med.toFixed(1) + ' ms' : '—');
+  setText(el.fsP99, data ? data.p99.toFixed(1) + ' ms' : '—');
+  setText(el.fsMax, data ? data.max.toFixed(0) + ' ms' : '—');
+  setText(el.fsSp, data ? data.spikes : '—');
+  // A newer run may have arrived while this one loaded.
+  if (S.frames.want !== w) syncFrames();
+}
+
+// ------------------------------------------------------------------ image compare
+const slots = Array.from(el.imgs.querySelectorAll('figure')).map((f) => {
+  const s = { f, img: f.querySelector('img'), cap: f.querySelector('figcaption b'), sub: f.querySelector('figcaption span'), src: '' };
+  s.img.addEventListener('load', () => f.classList.remove('err'));
+  s.img.addEventListener('error', () => f.classList.add('err'));
+  return s;
+});
+function renderImages() {
+  const c = S.cmp;
+  if (!c) return;
+  const key = c.case + '|' + c.t + '|' + c.items.map((i) => i.art).join(',');
+  if (key === S.cmpKey) return;
+  S.cmpKey = key;
+  el.imgEmpty.hidden = true;
+  el.imgs.dataset.n = String(c.items.length);
+  slots.forEach((s, i) => {
+    const it = c.items[i];
+    if (!it) { s.f.hidden = true; return; }
+    s.f.hidden = false;
+    s.f.classList.toggle('diff', !!it.diff);
+    const url = artUrl(c.case, it.art);
+    if (s.src !== url) { s.src = url; s.f.classList.remove('err'); s.img.src = url; }
+    setText(s.cap, it.label);
+    setText(s.sub, it.art);
+  });
+  setText(el.imgCtx, c.case + ' · ' + (c.kind === 'compare' ? 'previous vs current build' : c.action));
+}
+
+// ------------------------------------------------------------------ renderer jobs list
+function renderJobs() {
+  S.jobsDirty = false;
+  const list = Array.from(S.pendingJobs.values()).sort((a, b) => b.t - a.t).slice(0, 4);
+  const frag = document.createDocumentFragment();
+  for (const j of list) {
+    const li = document.createElement('li');
+    const c = document.createElement('span'); c.className = 'c'; c.textContent = j.case;
+    const t = document.createElement('span'); t.className = 't'; t.textContent = j.label;
+    li.append(c, t);
+    frag.appendChild(li);
+  }
+  el.jobsList.textContent = '';
+  el.jobsList.appendChild(frag);
+  const n = S.pendingJobs.size;
+  setText(el.jobsPend, n ? n + ' pending' : '');
+}
+
+// ------------------------------------------------------------------ drawing
+function drawGauge() {
+  const o = gGauge, ctx = begin(o);
+  if (!ctx) return;
+  const w = o.w, h = o.h;
+  const cx = w / 2, cy = h * 0.54, R = Math.min(w * 0.38, h * 0.42);
+  const a0 = Math.PI * 0.75, a1 = Math.PI * 2.25;
+  ctx.lineCap = 'butt';
+  for (let i = 0; i <= 20; i++) {
+    const a = a0 + (a1 - a0) * i / 20, major = i % 5 === 0;
+    const r0 = R + 13, r1 = R + (major ? 22 : 17);
+    ctx.strokeStyle = major ? 'rgba(148,163,184,0.5)' : 'rgba(148,163,184,0.2)';
+    ctx.lineWidth = major ? 2 : 1;
+    ctx.beginPath(); ctx.moveTo(cx + Math.cos(a) * r0, cy + Math.sin(a) * r0); ctx.lineTo(cx + Math.cos(a) * r1, cy + Math.sin(a) * r1); ctx.stroke();
+  }
+  ctx.lineCap = 'round';
+  ctx.lineWidth = 14;
+  ctx.strokeStyle = '#111a25';
+  ctx.beginPath(); ctx.arc(cx, cy, R, a0, a1); ctx.stroke();
+  const v = clamp(S.gaugeV / 100, 0, 1);
+  if (S.gaugeKnown && v > 0.002) {
+    const av = a0 + (a1 - a0) * v;
+    const g = ctx.createLinearGradient(cx - R, cy, cx + R, cy);
+    g.addColorStop(0, '#0ea5e9'); g.addColorStop(1, '#e0f2fe');
+    ctx.strokeStyle = g;
+    ctx.shadowColor = C.hw; ctx.shadowBlur = 18;
+    ctx.beginPath(); ctx.arc(cx, cy, R, a0, av); ctx.stroke();
+    ctx.shadowBlur = 0;
+  }
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#f1f5f9';
+  ctx.font = '700 54px ' + MONO;
+  ctx.fillText(S.gaugeKnown ? String(Math.round(S.gaugeV)) : '—', cx, cy - 2);
+  ctx.font = '700 11px ' + SANS;
+  ctx.fillStyle = C.dim;
+  ctx.fillText('UTILIZATION %', cx, cy + 36);
+  ctx.fillStyle = C.faint;
+  ctx.fillText('0', cx + Math.cos(a0) * (R - 2), cy + Math.sin(a0) * (R - 2) + 22);
+  ctx.fillText('100', cx + Math.cos(a1) * (R - 2), cy + Math.sin(a1) * (R - 2) + 22);
+}
+
+function drawSpark(o, series, color, ymax, now) {
+  const ctx = begin(o);
+  if (!ctx) return;
+  const w = o.w, h = o.h, top = 24, bot = h - 4, H = bot - top;
+  ctx.strokeStyle = 'rgba(148,163,184,0.07)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let k = 0; k < 4; k++) { const y = Math.round(top + H * k / 4) + 0.5; ctx.moveTo(0, y); ctx.lineTo(w, y); }
+  for (let k = 1; k < 4; k++) { const x = Math.round(w * k / 4) + 0.5; ctx.moveTo(x, top); ctx.lineTo(x, bot); }
+  ctx.stroke();
+  if (!o.grad) {
+    o.grad = ctx.createLinearGradient(0, top, 0, bot);
+    o.grad.addColorStop(0, color + '55'); o.grad.addColorStop(1, color + '00');
+  }
+  const segs = [];
+  let cur = null;
+  for (const p of series) {
+    if (p.v == null) { cur = null; continue; }
+    const x = w - (now - p.t) / WINDOW_MS * w;
+    const y = bot - clamp(p.v / ymax, 0, 1) * H;
+    if (!cur) { cur = []; segs.push(cur); }
+    cur.push(x, y);
+  }
+  ctx.lineJoin = 'round';
+  for (const s of segs) {
+    if (s.length < 4) continue;
+    ctx.beginPath();
+    ctx.moveTo(s[0], bot);
+    for (let i = 0; i < s.length; i += 2) ctx.lineTo(s[i], s[i + 1]);
+    ctx.lineTo(s[s.length - 2], bot);
+    ctx.closePath();
+    ctx.fillStyle = o.grad; ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(s[0], s[1]);
+    for (let i = 2; i < s.length; i += 2) ctx.lineTo(s[i], s[i + 1]);
+    ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.stroke();
+  }
+  const lastP = series[series.length - 1];
+  const last = segs[segs.length - 1];
+  if (last && lastP && lastP.v != null) {
+    ctx.fillStyle = color; ctx.shadowColor = color; ctx.shadowBlur = 14;
+    ctx.beginPath(); ctx.arc(last[last.length - 2], last[last.length - 1], 3.8, 0, Math.PI * 2); ctx.fill();
+    ctx.shadowBlur = 0;
+  }
+}
+
+function drawBars(now) {
+  const o = gBars, ctx = begin(o);
+  if (!ctx) return;
+  const w = o.w, h = o.h, d = S.decision;
+  if (!d || !d.rows.length) {
+    ctx.fillStyle = C.faint; ctx.font = '500 15px ' + SANS; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('candidate actions appear here', w / 2, h / 2);
+    o.dirty = false;
+    return;
+  }
+  const n = d.rows.length;
+  const rowH = Math.min(34, h / n);
+  const y0 = (h - rowH * n) / 2;
+  const labelW = Math.min(250, w * 0.4);
+  const x0 = labelW + 14, x1 = w - 78, bw = Math.max(10, x1 - x0);
+  const elapsed = now - d.t0;
+  let animating = false;
+  ctx.textBaseline = 'middle';
+  d.rows.forEach((c, i) => {
+    const chosen = c.action === d.chosen;
+    const yc = y0 + rowH * i + rowH / 2;
+    const bh = Math.max(8, rowH * 0.52);
+    const k = clamp((elapsed - i * 70) / 750, 0, 1);
+    if (k < 1) animating = true;
+    const fw = bw * c.p * easeOut(k);
+    ctx.textAlign = 'left';
+    ctx.font = (chosen ? '700 16px ' : '500 15px ') + SANS;
+    ctx.fillStyle = chosen ? '#ecfeff' : C.dim;
+    ctx.fillText(fitText(ctx, (chosen ? '▸ ' : '') + c.label, labelW), 0, yc);
+    roundRect(ctx, x0, yc - bh / 2, bw, bh, 3);
+    ctx.fillStyle = 'rgba(45,212,191,0.06)'; ctx.fill();
+    if (fw > 0.5) {
+      roundRect(ctx, x0, yc - bh / 2, fw, bh, 3);
+      if (chosen) {
+        const g = ctx.createLinearGradient(x0, 0, x0 + fw, 0);
+        g.addColorStop(0, '#0f766e'); g.addColorStop(1, C.clef);
+        ctx.fillStyle = g; ctx.shadowColor = C.clef; ctx.shadowBlur = 16; ctx.fill(); ctx.shadowBlur = 0;
+      } else { ctx.fillStyle = 'rgba(45,212,191,0.28)'; ctx.fill(); }
+    }
+    ctx.textAlign = 'right';
+    ctx.font = (chosen ? '700 17px ' : '500 15px ') + MONO;
+    ctx.fillStyle = chosen ? C.clef : C.dim;
+    ctx.fillText((c.p * 100 * easeOut(k)).toFixed(1) + '%', w, yc);
+  });
+  o.dirty = animating;
+}
+
+function drawFrames(now) {
+  const o = gFrames, ctx = begin(o);
+  if (!ctx) return;
+  const F = S.frames.data;
+  if (!F) { o.dirty = false; return; }
+  const G = S.frames.ghost;
+  const w = o.w, h = o.h, L = 60, R = 14, T = 12, B = 24;
+  const pw = w - L - R, ph = h - T - B;
+  let top = Math.max(F.thr * 1.3, F.max * 1.06, G ? G.max * 1.06 : 0, 1);
+  const step = niceStep(top, 4);
+  top = Math.ceil(top / step) * step;
+  const Y = (v) => T + ph - clamp(v / top, 0, 1) * ph;
+  const n = F.ms.length;
+  const X = (i, cnt) => L + (cnt <= 1 ? 0 : i / (cnt - 1)) * pw;
+
+  // Grid and axis labels
+  ctx.font = '500 12px ' + MONO; ctx.fillStyle = C.faint; ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+  ctx.strokeStyle = 'rgba(148,163,184,0.08)'; ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let v = 0; v <= top + 1e-9; v += step) { const y = Math.round(Y(v)) + 0.5; ctx.moveTo(L, y); ctx.lineTo(L + pw, y); ctx.fillText(v.toFixed(step < 1 ? 1 : 0), L - 10, y); }
+  ctx.stroke();
+  ctx.save(); ctx.translate(12, T + ph / 2); ctx.rotate(-Math.PI / 2); ctx.textAlign = 'center'; ctx.fillText('ms', 0, 0); ctx.restore();
+  ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  for (const f of [0, 0.25, 0.5, 0.75, 1]) { const i = Math.round(f * (n - 1)); ctx.fillText('#' + i, X(i, n), T + ph + 7); }
+
+  const k = clamp((now - S.frames.t0) / 1100, 0, 1);
+  const a = easeOut(k);
+  ctx.save();
+  ctx.beginPath(); ctx.rect(L, 0, pw * a + 2, h); ctx.clip();
+
+  const trace = (ms, cnt) => {
+    const cols = Math.max(1, Math.floor(pw));
+    ctx.beginPath();
+    if (cnt <= cols * 2) {
+      for (let i = 0; i < cnt; i++) { const x = X(i, cnt), y = Y(ms[i]); if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); }
+    } else {
+      // Keep each pixel column's minimum and maximum so short spikes stay visible.
+      for (let c = 0; c < cols; c++) {
+        const i0 = Math.floor(c * cnt / cols), i1 = Math.max(i0 + 1, Math.floor((c + 1) * cnt / cols));
+        let lo = Infinity, hi = -Infinity;
+        for (let i = i0; i < i1; i++) { const v = ms[i]; if (v < lo) lo = v; if (v > hi) hi = v; }
+        const x = L + c + 0.5;
+        if (c) ctx.lineTo(x, Y(lo)); else ctx.moveTo(x, Y(lo));
+        ctx.lineTo(x, Y(hi));
+      }
+    }
+  };
+
+  if (G) { trace(G.ms, G.ms.length); ctx.strokeStyle = 'rgba(148,163,184,0.35)'; ctx.lineWidth = 1.2; ctx.stroke(); }
+
+  trace(F.ms, n);
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = C.job; ctx.lineWidth = 1.6;
+  ctx.shadowColor = 'rgba(251,191,36,0.5)'; ctx.shadowBlur = 6;
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+
+  // Spikes above the threshold, in red
+  const thrY = Y(F.thr);
+  ctx.strokeStyle = 'rgba(251,113,133,0.55)'; ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  let drawn = 0;
+  for (let i = 0; i < n && drawn < 4000; i++) if (F.ms[i] > F.thr) { const x = X(i, n); ctx.moveTo(x, thrY); ctx.lineTo(x, Y(F.ms[i])); drawn++; }
+  ctx.stroke();
+  ctx.fillStyle = C.bad; ctx.shadowColor = C.bad; ctx.shadowBlur = 10;
+  ctx.beginPath();
+  drawn = 0;
+  for (let i = 0; i < n && drawn < 4000; i++) if (F.ms[i] > F.thr) { const x = X(i, n), y = Y(F.ms[i]); ctx.moveTo(x + 3.2, y); ctx.arc(x, y, 3.2, 0, Math.PI * 2); drawn++; }
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.restore();
+
+  // Median and 2x-median threshold
+  ctx.strokeStyle = 'rgba(226,232,240,0.25)'; ctx.lineWidth = 1; ctx.setLineDash([]);
+  ctx.beginPath(); ctx.moveTo(L, Math.round(Y(F.med)) + 0.5); ctx.lineTo(L + pw, Math.round(Y(F.med)) + 0.5); ctx.stroke();
+  ctx.strokeStyle = C.bad; ctx.lineWidth = 1.5; ctx.setLineDash([8, 6]);
+  ctx.beginPath(); ctx.moveTo(L, Math.round(thrY) + 0.5); ctx.lineTo(L + pw, Math.round(thrY) + 0.5); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.font = '700 12px ' + MONO; ctx.textAlign = 'right'; ctx.textBaseline = 'bottom';
+  const lab = 'spike threshold 2× median = ' + F.thr.toFixed(1) + ' ms';
+  const lw = ctx.measureText(lab).width;
+  ctx.fillStyle = 'rgba(7,10,15,0.85)'; ctx.fillRect(L + pw - lw - 10, thrY - 19, lw + 10, 17);
+  ctx.fillStyle = C.bad; ctx.fillText(lab, L + pw - 5, thrY - 4);
+  ctx.textBaseline = 'top'; ctx.fillStyle = 'rgba(226,232,240,0.55)'; ctx.font = '500 12px ' + MONO;
+  ctx.fillText('median ' + F.med.toFixed(1) + ' ms', L + pw - 5, Y(F.med) + 4);
+
+  o.dirty = k < 1;
+}
+
+function typewriter(now) {
+  const th = S.thought;
+  if (!th || th.done) return;
+  const rate = Math.max(45, th.text.length / 5);
+  const n = Math.min(th.text.length, Math.floor((now - th.t0) / 1000 * rate));
+  if (n !== th.shown) { th.shown = n; el.thText.textContent = th.text.slice(0, n); }
+  if (n >= th.text.length) {
+    th.done = true;
+    if (th.reason) el.thReason.classList.add('show');
+    setTimeout(() => { if (S.thought === th) el.thCaret.classList.add('off'); }, 2500);
+  }
+}
+
+let lastNow = performance.now(), lastSec = -1;
+function frame(now) {
+  requestAnimationFrame(frame);
+  const dt = Math.min(100, now - lastNow);
+  lastNow = now;
+
+  const sec = Math.floor(Date.now() / 1000);
+  if (sec !== lastSec) {
+    lastSec = sec;
+    const d = new Date();
+    setText(el.clock, hms(d));
+    setText(el.date, DAYS[d.getDay()] + ' ' + pad2(d.getDate()) + ' ' + MONTHS[d.getMonth()] + ' ' + d.getFullYear());
+  }
+
+  const prevV = S.gaugeV;
+  S.gaugeV += (S.gaugeT - S.gaugeV) * (1 - Math.exp(-dt / 260));
+  if (gGauge.dirty || Math.abs(S.gaugeV - prevV) > 0.003) { drawGauge(); gGauge.dirty = false; }
+
+  drawSpark(gSparkGpu, S.gpuSeries, C.hw, 100, now);
+
+  let peak = 0;
+  for (const p of S.tokSeries) if (p.v != null && p.v > peak) peak = p.v;
+  const target = Math.max(20, peak * 1.2);
+  S.tokScale += (target - S.tokScale) * (1 - Math.exp(-dt / 400));
+  drawSpark(gSparkTok, S.tokSeries, C.ornith, S.tokScale, now);
+  setText(el.tokMax, 'peak ' + peak.toFixed(0) + ' tok/s');
+
+  if (gBars.dirty) drawBars(now);
+  if (gFrames.dirty) drawFrames(now);
+  typewriter(now);
+  if (S.jobsDirty) renderJobs();
+}
+
+// ------------------------------------------------------------------ start
+refreshConn();
+pollSystem();
+connectStream();
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+#!/bin/sh
+# Build the renderer at a git revision of the product repo and print the binary path. Builds are cached per commit.
+set -eu
+rev="$1"
+product="${PRODUCT_DIR:-/opt/hack/product}"
+builds="${ROMEO_BUILDS:-/opt/hack/builds}"
+git -C "$product" fetch -q origin 2>/dev/null || true
+sha=$(git -C "$product" rev-parse --verify -q "$rev^{commit}" || git -C "$product" rev-parse --verify "origin/$rev^{commit}")
+out="$builds/$sha"
+if [ ! -x "$out/romeo-render" ]; then
+  mkdir -p "$out/src"
+  git -C "$product" archive "$sha" | tar -x -C "$out/src"
+  cmake -S "$out/src" -B "$out/build" -G Ninja -DCMAKE_BUILD_TYPE=Release >"$out/build.log" 2>&1
+  ninja -C "$out/build" romeo-render >>"$out/build.log" 2>&1
+  cp "$out/build/romeo-render" "$out/romeo-render"
+fi
+echo "$out/romeo-render"
