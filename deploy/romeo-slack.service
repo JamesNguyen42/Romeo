@@ -1,0 +1,16 @@
+[Unit]
+Description=Romeo Slack bridge (Socket Mode; tokens from ~/.config/romeo/slack.env)
+After=romeo.service network-online.target
+
+[Service]
+User=dell
+WorkingDirectory=/opt/hack/Romeo
+EnvironmentFile=/opt/hack/Romeo/deploy/romeo.env
+Environment=SLACK_REPORT_CHANNEL=C0CBN7SGVLM
+Environment=BRIDGE_STATE=/opt/hack/bridge-state.json
+ExecStart=/opt/hack/venv-bridge/bin/python -u /opt/hack/Romeo/bridge/slack_bridge.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
