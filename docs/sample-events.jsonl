@@ -1,0 +1,10 @@
+{"seq":1,"case":"case-06","t_ms":1793000000000,"type":"case_opened","data":{"title":"Frame spikes every few seconds","setup":"D","report":"Playback stutters on the 8-view setup. Average frame time looks fine."}}
+{"seq":2,"case":"case-06","t_ms":1793000001200,"type":"decision","data":{"candidates":[{"action":"read_frame_times","p":0.64},{"action":"read_logs","p":0.21},{"action":"stop_need_more_info","p":0.15}],"chosen":"read_frame_times"}}
+{"seq":3,"case":"case-06","t_ms":1793000002100,"type":"action_result","data":{"action_id":"a-06-1","source":"run","summary":"p50 11.8 ms, p99 41.3 ms; spikes about every 3 s","artifacts":["frame-times.csv"]}}
+{"seq":4,"case":"case-06","t_ms":1793000002150,"type":"fact","data":{"text":"Frame time spikes above 40 ms roughly every 3 seconds; the median is normal.","evidence":["frame-times.csv"]}}
+{"seq":5,"case":"case-06","t_ms":1793000003000,"type":"decision","data":{"candidates":[{"action":"capture_trace","p":0.72},{"action":"read_logs","p":0.18},{"action":"stop_need_more_info","p":0.10}],"chosen":"capture_trace"}}
+{"seq":6,"case":"case-06","t_ms":1793000003050,"type":"action_requested","data":{"action_id":"a-06-2","kind":"capture_trace","args":{"setup":"D","seconds":10}}}
+{"seq":7,"case":"case-06","t_ms":1793000009000,"type":"restarted","data":{"pending":["a-06-2"]}}
+{"seq":8,"case":"case-06","t_ms":1793000014000,"type":"action_result","data":{"action_id":"a-06-2","source":"run","summary":"Main thread waits on the asset-loader lock for 29 ms during each spike","artifacts":["trace.json"]}}
+{"seq":9,"case":"case-06","t_ms":1793000014100,"type":"fact","data":{"text":"Each spike lines up with the main thread waiting on the asset-loader lock.","evidence":["trace.json"]}}
+{"seq":10,"case":"case-06","t_ms":1793000016000,"type":"done","data":{"summary":"File reads happen while the asset loader holds its lock; the render thread blocks behind them.","fix":"Read the file before taking the lock; hold the lock only to publish the loaded asset.","checks":["p99 frame time back under 14 ms on setup D","golden images unchanged"]}}
