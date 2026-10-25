@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#f7f8fc">
+    <meta name="description" content="An interactive walkthrough of Romeo's proposed test-and-triage loop.">
+    <title>Romeo — The test &amp; triage loop</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+    <script src="script.js" defer></script>
+  </head>
+  <body>
+    <main class="page-shell">
+      <header class="topbar">
+        <a class="brand" href="#" aria-label="Romeo home">
+          <span class="brand-mark" aria-hidden="true">r</span>
+          <span>romeo</span>
+        </a>
+        <span class="topbar-note"><span class="status-dot"></span> A proposed workflow</span>
+      </header>
+
+      <section class="intro" aria-labelledby="page-title">
+        <div class="intro-copy">
+          <p class="eyebrow"><span class="eyebrow-line"></span> THE TEST-AND-TRIAGE LOOP</p>
+          <h1 id="page-title">Ship with a little<br><span>more confidence.</span></h1>
+          <p class="intro-text">A pull request comes in. Romeo finds the gaps, checks the results, and helps get the right fix in front of an engineer.</p>
+        </div>
+        <div class="intro-aside" aria-hidden="true">
+          <span class="orbit orbit-one"></span>
+          <span class="orbit orbit-two"></span>
+          <span class="orbit orbit-three"></span>
+          <span class="orbit-core"><span></span></span>
+          <span class="orbit-label label-top">find</span>
+          <span class="orbit-label label-right">test</span>
+          <span class="orbit-label label-bottom">learn</span>
+        </div>
+      </section>
+
+      <section class="workspace" aria-label="Interactive workflow">
+        <div class="map-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="section-kicker">THE BIG PICTURE</p>
+              <h2>One loop, two ways in</h2>
+            </div>
+            <span class="map-hint">Select any step to explore <span aria-hidden="true">↗</span></span>
+          </div>
+
+          <div class="map-scroll">
+            <div class="workflow-map" id="workflow-map">
+              <svg class="map-lines" viewBox="0 0 1000 380" preserveAspectRatio="none" aria-hidden="true">
+                <defs>
+                  <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+                    <path d="M0,0 L8,4 L0,8 z" fill="#a7b0c1"></path>
+                  </marker>
+                </defs>
+                <path d="M135 77 H180" marker-end="url(#arrow)"></path>
+                <path d="M355 77 H400" marker-end="url(#arrow)"></path>
+                <path d="M575 77 H620" marker-end="url(#arrow)"></path>
+                <path d="M725 117 V163" marker-end="url(#arrow)"></path>
+                <path d="M620 203 H545" marker-end="url(#arrow)"></path>
+                <path d="M725 243 V280 H485 V316" marker-end="url(#arrow)"></path>
+                <path d="M135 355 H180" marker-end="url(#arrow)"></path>
+                <path d="M355 355 H400" marker-end="url(#arrow)"></path>
+                <path d="M575 355 H620" marker-end="url(#arrow)"></path>
+                <path d="M795 355 H840" marker-end="url(#arrow)"></path>
+                <path d="M360 163 V130 H725 V117" marker-end="url(#arrow)"></path>
+              </svg>
+
+              <div class="flow-card input-card pull-request">
+                <span class="input-icon" aria-hidden="true">↗</span>
+                <span class="card-title">Pull request</span>
+                <span class="card-copy">From any repository</span>
+              </div>
+              <button class="flow-card model-card step-one" data-step="1" type="button">
+                <span class="card-number">01 <span>· typed decision</span></span>
+                <span class="card-title">Find test gaps</span>
+                <span class="card-copy">What should this change test?</span>
+              </button>
+              <button class="flow-card ai-card step-two" data-step="2" type="button">
+                <span class="card-number">02 <span>· language model</span></span>
+                <span class="card-title">Write the test</span>
+                <span class="card-copy">One new test for each gap</span>
+              </button>
+              <button class="flow-card runner-card step-three" data-step="3" type="button">
+                <span class="card-number">03 <span>· no model</span></span>
+                <span class="card-title">Run on main</span>
+                <span class="card-copy">CI runners and cloud instances</span>
+              </button>
+              <button class="flow-card model-card step-nine" data-step="9" type="button">
+                <span class="card-number">09 <span>· no model next time</span></span>
+                <span class="card-title">Make repeat checks deterministic</span>
+                <span class="card-copy">Frequent checks become regular tests</span>
+              </button>
+              <button class="flow-card model-card step-four" data-step="4" type="button">
+                <span class="card-number">04 <span>· typed decision</span></span>
+                <span class="card-title">Classify the result</span>
+                <span class="card-copy">Real failure, flaky, or infrastructure?</span>
+              </button>
+              <div class="flow-card input-card bug-report">
+                <span class="input-icon" aria-hidden="true">＋</span>
+                <span class="card-title">Incoming bug</span>
+                <span class="card-copy">Jira, Slack report</span>
+              </div>
+              <button class="flow-card model-card step-five" data-step="5" type="button">
+                <span class="card-number">05 <span>· typed decision</span></span>
+                <span class="card-title">Route the bug</span>
+                <span class="card-copy">Area, owner, or known duplicate?</span>
+              </button>
+              <button class="flow-card ai-card step-six" data-step="6" type="button">
+                <span class="card-number">06 <span>· language model</span></span>
+                <span class="card-title">Make a first fix</span>
+                <span class="card-copy">Escalate hard cases when needed</span>
+              </button>
+              <button class="flow-card model-card step-seven" data-step="7" type="button">
+                <span class="card-number">07 <span>· human in the loop</span></span>
+                <span class="card-title">Check with a human</span>
+                <span class="card-copy">Review before anything is posted</span>
+              </button>
+              <button class="flow-card ai-card step-eight" data-step="8" type="button">
+                <span class="card-number">08 <span>· language model</span></span>
+                <span class="card-title">Summarize for the engineer</span>
+                <span class="card-copy">What failed, what changed, and why</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="legend" aria-label="Workflow key">
+            <span><i class="legend-swatch swatch-model"></i>Typed decision</span>
+            <span><i class="legend-swatch swatch-ai"></i>Language model</span>
+            <span><i class="legend-swatch swatch-runner"></i>Runners &amp; tests</span>
+            <span><i class="legend-swatch swatch-input"></i>Incoming work</span>
+          </div>
+        </div>
+
+        <aside class="detail-panel" aria-live="polite" aria-atomic="true">
+          <div class="detail-topline">
+            <span class="detail-label">NOW EXPLORING</span>
+            <span class="step-count" id="step-count">01 / 09</span>
+          </div>
+          <div class="detail-progress" aria-hidden="true"><span id="progress-fill"></span></div>
+          <div class="detail-content" id="detail-content">
+            <span class="detail-chip model-chip" id="detail-chip">TYPED DECISION</span>
+            <p class="detail-step" id="detail-step">STEP 01</p>
+            <h2 id="detail-title">Find the test gaps</h2>
+            <p class="detail-description" id="detail-description">A pull request starts the loop. Romeo looks at the change and works out which important behaviors still need a test.</p>
+            <div class="detail-output">
+              <span class="output-icon" aria-hidden="true">✳</span>
+              <div><span class="output-label">THE TAKEAWAY</span><p id="detail-output">A short list of missing tests, ready for the next step.</p></div>
+            </div>
+          </div>
+          <div class="detail-footer">
+            <button class="nav-button prev-button" id="prev-step" type="button" aria-label="Previous step" disabled>←</button>
+            <span class="nav-caption">TAKE IT STEP BY STEP</span>
+            <button class="nav-button next-button" id="next-step" type="button" aria-label="Next step">→</button>
+          </div>
+        </aside>
+      </section>
+
+      <footer class="page-footer">
+        <span>Built around a simple idea: automate the repeatable, keep people in the loop.</span>
+        <span class="footer-mark">ROMEO <span>·</span> QUALITY LOOP</span>
+      </footer>
+    </main>
+  </body>
+</html>
