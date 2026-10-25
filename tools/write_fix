@@ -34,17 +34,18 @@ def changed_regions(diff, rev, budget=9000):
     return text[:budget]
 
 
-context = changed_regions(change, rev)
-change = change[:5000]
+# Ornith runs with a 128k context: whole changed files fit; fall back to changed regions only if they do not.
+full = "".join(f"\n===== {f} (at {rev}) =====\n" + "\n".join(f"{n:5d}  {l}" for n, l in enumerate(git("show", f"{rev}:{f}", check=False).splitlines(), 1)) for f in files[:3])
+context = full if len(full) < 200_000 else changed_regions(change, rev, budget=120_000)
 
 branch = f"fix/{case}"
 feedback, attempts = "", []
 for attempt in (1, 2):
     content, reasoning = ornith(
-        "You fix renderer regressions. Output one ```diff block only: a unified diff with a/ and b/ paths that applies with "
+        "You fix renderer regressions. Think first: trace how the measured symptom arises in this code, then change only what causes it. Output one ```diff block only: a unified diff with a/ and b/ paths that applies with "
         "`git apply` on top of the given revision. Keep the patch minimal and keep the code style.",
         f"Case:\n{INPUT['case_state']}\n\nThe change that introduced the problem:\n```diff\n{change[:8000]}\n```\n"
-        f"Changed regions of the current source (numbered lines):{context}\n{feedback}", 1500)
+        f"Current source of the changed files (numbered lines):{context}\n{feedback}", 12000, think=True)
     patch = fenced(content, "diff") + "\n"
     (JOB / f"fix-{attempt}.patch").write_text(patch)
     work = Path(tempfile.mkdtemp(prefix=f"fix-{case}-"))
