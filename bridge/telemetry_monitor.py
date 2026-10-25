@@ -9,6 +9,7 @@ import urllib.request
 from pathlib import Path
 
 API = os.environ.get("ROMEO_API", "http://127.0.0.1:8790")
+CLEF = os.environ.get("CLEF_URL", "http://127.0.0.1:8001/v1/systemone")
 RELEASE = os.environ.get("ROMEO_CHAT_REV", "release/current")
 TOOLS = Path(os.environ.get("ROMEO_TOOLS", "/opt/hack/Romeo/tools"))
 STORE = Path(os.environ.get("TELEMETRY_STORE", "/opt/hack/telemetry"))
@@ -36,8 +37,24 @@ def renderer_busy():
         return True
 
 
-def open_alerts():
-    return {c["title"] for c in api("GET", "/api/cases") if c["status"] not in ("done", "stopped")}
+def triage(report, rig):
+    """Clef triage before a case is opened: is this alert the same problem as a case on the board, and does it go to
+    the front of the queue? One typed request, two questions; returns (duplicate case id or None, front, probabilities)."""
+    cases = [c for c in api("GET", "/api/cases") if c.get("setup") == rig and c["status"] != "stopped"][-8:]
+    dup = {c["id"]: f"Same problem as {c['id']}: {c['title']}" for c in cases}
+    dup["new_problem"] = "A problem that none of the listed cases covers"
+    body = {"model": "clef-flash", "state": report, "questions": {
+        "duplicate_of": {"type": "choice", "instructions": "Is this alert the same problem as a case already on the board?", "criteria": dup},
+        "queue": {"type": "choice", "instructions": "Where does this alert go in the work queue?", "criteria": {
+            "front": "Wrong output, crash or anything that can change what a perception model learns about people: start it first",
+            "back": "Performance or memory regression with correct output: start it after the current work"}}}}
+    req = urllib.request.Request(CLEF, json.dumps(body).encode(), {"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        a = json.loads(r.read())["answers"]
+    d, q = a["duplicate_of"], a["queue"]
+    same = d["choice"] if d["choice"] != "new_problem" and d["probabilities"].get(d["choice"], 0) >= 0.5 else None
+    return same, q["choice"] == "front", {"duplicate_of": d["choice"], "p_duplicate": round(d["probabilities"].get(d["choice"], 0), 2),
+                                          "queue": q["choice"], "p_queue": round(q["probabilities"].get(q["choice"], 0), 2)}
 
 
 def sample(rig):
@@ -70,13 +87,19 @@ def main():
             if not tripped:
                 continue
             title = f"Alert: {', '.join(n.replace('_', ' ') for n, _ in tripped)} on rig {rig}"
-            if title in open_alerts():
-                continue
             numbers = ", ".join(f"{k} {m[k]:.1f}" for k in ("p50_ms", "p99_ms", "max_ms", "memory_growth_mb", "mv_error_px") if isinstance(m.get(k), (int, float)))
             report = (f"Production telemetry alert from the always-on monitor. Run {out.name} of the current release on the "
                       f"{RIG_NAMES.get(rig, 'rig ' + rig)} (setup {rig}) tripped: {'; '.join(d for _, d in tripped)}. "
                       f"Measured: {numbers or 'no summary (exit code ' + str(m['exit_code']) + ')'}.")
-            api("POST", "/api/cases", {"title": title, "setup": rig, "report": report, "channel": "monitor", "user": "telemetry"})
+            same, front, why = triage(report, rig)
+            print(json.dumps({"triage": why, "run": out.name}), flush=True)
+            if same:  # attach the repeat to the existing case instead of opening another card
+                api("POST", f"/api/cases/{same}/messages", {"text": f"Seen again by the monitor: {report} Clef: same problem as {same} "
+                                                                    f"(p={why['p_duplicate']}); no new case opened.", "channel": "monitor", "user": "clef-triage"})
+                continue
+            made = api("POST", "/api/cases", {"title": title, "setup": rig, "report": report, "channel": "monitor", "user": "telemetry"})
+            if front and made.get("id"):
+                api("POST", f"/api/cases/{made['id']}/priority", {"by": f"clef-triage p={why['p_queue']}"})
         except Exception as e:
             print("monitor sample failed:", type(e).__name__, str(e)[:200], flush=True)
 
