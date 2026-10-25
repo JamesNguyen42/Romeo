@@ -10,7 +10,32 @@ check = checks[-1] if checks else None
 rev, good = ref(rev), ref(good)
 change = git("diff", "-U6", f"{good}...{rev}")
 files = [l[6:] for l in change.splitlines() if l.startswith("+++ b/")]
-context = "".join(f"\n===== {f} (at {rev}) =====\n" + git("show", f"{rev}:{f}", check=False)[:12000] for f in files[:2])
+
+
+def changed_regions(diff, rev, budget=9000):
+    """Each changed hunk of the revision under investigation, +-30 lines, numbered. Ornith's context is 8k tokens,
+    so whole files do not fit; the changed functions are what a fix needs."""
+    import re
+    out, current = [], None
+    ranges = {}
+    for line in diff.splitlines():
+        if line.startswith("+++ b/"):
+            current = line[6:]
+        m = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", line)
+        if m and current:
+            start, count = int(m.group(1)), int(m.group(2) or 1)
+            ranges.setdefault(current, []).append((max(1, start - 30), start + count + 30))
+    for f, spans in ranges.items():
+        src = git("show", f"{rev}:{f}", check=False).splitlines()
+        for a, b in spans:
+            block = "\n".join(f"{n:5d}  {src[n - 1]}" for n in range(a, min(b, len(src)) + 1))
+            out.append(f"\n===== {f} lines {a}-{min(b, len(src))} (at {rev}) =====\n{block}")
+    text = "".join(out)
+    return text[:budget]
+
+
+context = changed_regions(change, rev)
+change = change[:5000]
 
 branch = f"fix/{case}"
 feedback, attempts = "", []
@@ -19,7 +44,7 @@ for attempt in (1, 2):
         "You fix renderer regressions. Output one ```diff block only: a unified diff with a/ and b/ paths that applies with "
         "`git apply` on top of the given revision. Keep the patch minimal and keep the code style.",
         f"Case:\n{INPUT['case_state']}\n\nThe change that introduced the problem:\n```diff\n{change[:8000]}\n```\n"
-        f"Current source of the changed files:{context}\n{feedback}", 2400)
+        f"Changed regions of the current source (numbered lines):{context}\n{feedback}", 1500)
     patch = fenced(content, "diff") + "\n"
     (JOB / f"fix-{attempt}.patch").write_text(patch)
     work = Path(tempfile.mkdtemp(prefix=f"fix-{case}-"))
