@@ -225,6 +225,7 @@ struct Case {
     uint32_t message_count = 0;
     FixedArray<EventRef, kMaxEventsPerCase> events;
     int seq = 0;
+    int64_t opened_ms = 0;  // t_ms of case_opened: when the report arrived
     int64_t updated_ms = 0;
     uint32_t generation = 0; // changes when the slot is reused, so late model completions are dropped
     bool busy = false;       // a decide, conclude or stop call for this case is in flight

@@ -292,6 +292,7 @@ void apply(Case &c, yyjson_val *ev) {
     yyjson_val *d = yyjson_obj_get(ev, "data");
     c.seq = int(yyjson_get_int(yyjson_obj_get(ev, "seq")));
     c.updated_ms = yyjson_get_sint(yyjson_obj_get(ev, "t_ms"));
+    if (!c.opened_ms) c.opened_ms = c.updated_ms;
 
     if (type == "case_opened") {
         c.status = Status::investigating;

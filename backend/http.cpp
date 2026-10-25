@@ -126,7 +126,7 @@ static bool respond_file(Conn &c, const char *path, uint64_t limit) {
 
 static void write_case_summary(Body &b, const Case &c, bool close_object = true) {
     cat(b, "{\"id\":", json_string(c.def.id.view()), ",\"title\":", json_string(c.def.title.view()), ",\"setup\":\"", c.def.setup, "\",\"status\":",
-        json_string(status_name(c.status)), ",\"waiting_for\":", json_string(c.waiting_for.view()), ",\"updated_ms\":", c.updated_ms,
+        json_string(status_name(c.status)), ",\"waiting_for\":", json_string(c.waiting_for.view()), ",\"opened_ms\":", c.opened_ms, ",\"updated_ms\":", c.updated_ms,
         ",\"event_count\":", c.events.count, ",\"scenario_id\":", json_string(c.def.scenario_id.view()),
         ",\"mode\":", json_string(c.def.comparison ? "comparison" : "investigation"), ",\"view_seed\":", c.def.view_seed);
     if (close_object) b.add('}');

@@ -1427,8 +1427,35 @@ function makeRow(id) {
 function boardOrder() {
   return S.cases.map((c, i) => ({ c, i })).sort((a, b) => ((RANK[a.c.status] ?? 0) - (RANK[b.c.status] ?? 0)) || (a.i - b.i)).map((x) => x.c);
 }
+// Finished cases with the same title are one problem seen several times: the board shows the newest finished one
+// (a done case before a stopped one) with a "seen N×" count and hides the rest. Active cases are always shown.
+function repeatGroups(list) {
+  const groups = new Map();
+  for (const c of list) {
+    if (c.status !== 'done' && c.status !== 'stopped') continue;
+    const k = oneLine(c.title);
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(c);
+  }
+  const hidden = new Set(), seen = new Map();
+  for (const g of groups.values()) {
+    if (g.length < 2) continue;
+    g.sort((a, b) => (a.status === 'done') - (b.status === 'done') || (num(a.updated_ms) || 0) - (num(b.updated_ms) || 0));
+    const keep = g[g.length - 1];
+    seen.set(str(keep.id), g.length);
+    for (const c of g) if (c !== keep) hidden.add(str(c.id));
+  }
+  return { hidden, seen };
+}
+function clock(ms) {
+  const t = num(ms);
+  if (!t) return '';
+  const d = new Date(t);
+  return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+}
 function renderBoard() {
   const order = boardOrder();
+  const rep = repeatGroups(order);
   S.order = order.map((c) => str(c.id));
   const ids = new Set(S.order);
   let shown = 0;
@@ -1443,7 +1470,7 @@ function renderBoard() {
     const st = STATUSES.includes(c.status) ? c.status : 'investigating';
     if (r.st !== st) { r.st = st; setText(r.pillT, st); }
     r.el.className = 'case clk s-' + st + (S.selId === id ? ' sel' : '') + (D.open && D.id === id ? ' open' : '');
-    r.el.hidden = !!S.filter && st !== S.filter;
+    r.el.hidden = (!!S.filter && st !== S.filter) || (!S.filter && rep.hidden.has(id));
     if (!r.el.hidden) shown++;
     if (st === 'investigating' || st === 'waiting') {
       const nd = nowDoing(id, st);
@@ -1452,11 +1479,13 @@ function renderBoard() {
       r.wf.style.color = nd.c;
     } else { setText(r.wfIc, ''); setText(r.wfT, ''); }
     const n = num(c.event_count);
-    setText(r.evn, n == null ? '' : n + ' ev');
+    const times = rep.seen.get(id);
+    setText(r.evn, [clock(c.opened_ms || c.updated_ms), times ? 'seen ' + times + '×' : '', n == null ? '' : n + ' ev'].filter(Boolean).join(' · '));
   });
   for (const [id, r] of rows) if (!ids.has(id)) { r.el.remove(); rows.delete(id); }
   E['case-list'].classList.toggle('dense', shown > 8);
-  setText(E['cases-n'], S.filter ? shown + ' of ' + S.cases.length + ' · ' + S.filter : S.cases.length + (S.cases.length === 1 ? ' case' : ' cases'));
+  setText(E['cases-n'], S.filter ? shown + ' of ' + S.cases.length + ' · ' + S.filter
+    : shown + (shown === 1 ? ' case' : ' cases') + (rep.hidden.size ? ' · ' + rep.hidden.size + ' repeats folded' : ''));
 }
 function flashCase(id) {
   const r = rows.get(str(id));
