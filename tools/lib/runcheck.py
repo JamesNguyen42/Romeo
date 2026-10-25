@@ -37,7 +37,9 @@ m["fatal_lines"] = sum('"fatal"' in line for line in log.read_text().splitlines(
 
 print(json.dumps(m))
 try:
-    ok = bool(eval(expect, {"__builtins__": {}}, {"m": m, "abs": abs, "min": min, "max": max}))
+    # Both m["p95_ms"] and bare p95_ms are accepted; metrics a run does not produce read as None, so the condition fails.
+    names = {k: m.get(k) for k in m} | {"m": m, "abs": abs, "min": min, "max": max}
+    ok = bool(eval(expect, {"__builtins__": {}}, names))
 except Exception as e:  # a condition that cannot be evaluated on these metrics is a failed check, reported as such
     print(f"condition error: {type(e).__name__}: {e}")
     sys.exit(2)
