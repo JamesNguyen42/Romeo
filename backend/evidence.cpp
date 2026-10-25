@@ -280,6 +280,29 @@ static Column csv_column(Arena &arena, std::string_view path_dir, std::string_vi
     return c;
 }
 
+void describe_crashed_run(Service &s, std::string_view dir, EvidenceText &text) {
+    ArenaScope scope(s.evidence);
+    Column t = csv_column(s.evidence, dir, "memory.csv", 0);
+    Column m = csv_column(s.evidence, dir, "memory.csv", 1);
+    Column f = csv_column(s.evidence, dir, "frames.csv", 0);
+    if (f.count) cat(text, "; it rendered ", f.count, " frames first");
+    if (m.count > 1)
+        cat(text, "; resident memory went from ", decimal(m.values[0] / 1048576.0, 0), " MB to ", decimal(m.back() / 1048576.0, 0), " MB over ",
+            decimal((t.back() - t.values[0]) / 1000.0, 1), " s before it stopped");
+    PathText p;
+    cat(p, dir, "/log.jsonl");
+    FileData log = read_file(s.evidence, p.c_str(), size_t(1) << 20);
+    if (log.status != ReadStatus::ok) return;
+    std::string_view rest = log.bytes, fatal;
+    while (!rest.empty()) {
+        size_t nl = rest.find('\n');
+        std::string_view line = rest.substr(0, nl);
+        if (line.find("\"fatal\"") != std::string_view::npos) fatal = line;
+        rest = nl == std::string_view::npos ? std::string_view() : rest.substr(nl + 1);
+    }
+    if (!fatal.empty()) cat(text, "; last fatal log line: ", fatal.substr(0, 260));
+}
+
 void describe_memory_run(Service &s, std::string_view dir, std::string_view label, const Summary &sum, EvidenceText &text) {
     ArenaScope scope(s.evidence);
     Column t = csv_column(s.evidence, dir, "memory.csv", 0);

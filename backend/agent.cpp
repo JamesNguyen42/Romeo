@@ -425,15 +425,16 @@ static void ingest_job(Service &s, Case &c, const Pending &p) {
 
     if (code != 0 || !sum.ok) {
         EvidenceText text;
-        cat(text, "Run on setup ", setup, " exited with code ", code, code == 134 ? " (abort)" : "", " before writing results");
+        cat(text, "Run on setup ", setup, " exited with code ", code, code == 134 ? " (abort, SIGABRT)" : "", " before writing results");
+        describe_crashed_run(s, dir, text);
         emit(s, c, "action_result", [&](EventLine &b) {
             result_head(b);
             cat(b, ",\"summary\":", json_string(text.view()), ",\"artifacts\":");
-            write_artifacts(b, s, p.action_id.view(), {"log.jsonl", "stdout.txt"});
+            write_artifacts(b, s, p.action_id.view(), {"log.jsonl", "stdout.txt", "memory.csv", "frames.csv"});
             b.add('}');
         });
         FixedStringBuilder<1024> arts;
-        write_artifacts(arts, s, p.action_id.view(), {"log.jsonl"});
+        write_artifacts(arts, s, p.action_id.view(), {"log.jsonl", "memory.csv"});
         text.add('.');
         emit_fact(s, c, text.view(), arts.view());
         return;

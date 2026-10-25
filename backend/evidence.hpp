@@ -86,6 +86,8 @@ void store_key(FixedStringBuilder<N> &b, const Case &c, std::string_view action_
 void upload_run_log(Service &s, const Case &c, std::string_view action_id, std::string_view dir);
 
 // Fact text for a finished renderer run. label is "Current build, setup B" and similar.
+// A run that exited before writing summary.json: what its samples and its last fatal log line show.
+void describe_crashed_run(Service &s, std::string_view dir, EvidenceText &text);
 void describe_memory_run(Service &s, std::string_view dir, std::string_view label, const Summary &sum, EvidenceText &text);
 void describe_trace_run(Service &s, std::string_view dir, std::string_view label, const Summary &sum, EvidenceText &text);
 void describe_frame_run(Service &s, std::string_view dir, std::string_view label, const Summary &sum, EvidenceText &text);
