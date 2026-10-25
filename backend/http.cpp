@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include <dirent.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -680,8 +681,11 @@ static void handle(Service &s, Conn &conn, const Request &r) {
         d.id.assign(id.view());
         d.title.assign(json_str(b, "title"));
         d.report.assign(json_str(b, "report"));
+        // A report from chat investigates the current release against the last good one.
+        const char *chat_rev = std::getenv("ROMEO_CHAT_REV");
+        d.rev.assign(chat_rev && *chat_rev ? chat_rev : "release/current");
         d.rev_good.assign("main");
-        d.setup = !setup.empty() && setup[0] >= 'A' && setup[0] <= 'E' ? setup[0] : 'A';
+        d.setup = !setup.empty() && setup[0] >= 'A' && setup[0] <= 'H' ? setup[0] : 'A';
         Case *c = open_case(s, d, json_str(b, "channel"), json_str(b, "user"));
         if (!c) return respond_json(conn, 503, "{\"error\":\"the case store is full\"}");
         Body *out = body_in_arena(s);

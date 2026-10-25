@@ -337,6 +337,21 @@ static void run_instant(Service &s, Case &c, std::string_view action_id, ToolId 
 
 // ---------------------------------------------------------------- execute
 
+// Verification runs the agent-written fix when one exists, otherwise the known-good revision (reference fix).
+static void start_verification(Service &s, Case &c) {
+    FixedString<kNameBytes> action_id;
+    action_id_for(action_id, c);
+    PathText dir;
+    job_dir(dir, s, action_id.view());
+    bool ok = emit(s, c, "action_requested", [&](EventLine &b) {
+        cat(b, "{\"action_id\":", json_string(action_id.view()), ",\"kind\":\"verify_fix\",\"label\":\"");
+        if (c.fix_rev.empty()) b.add("verification run with the reference fix on setup ");
+        else b.add("verification run with agent-written fix ").escaped(c.fix_rev.view()).add(" on setup ");
+        cat(b, c.def.setup, "\",\"job\":true,\"dir\":", json_string(dir.view()), "}");
+    });
+    if (ok) queue_job(s, c, action_id.view(), "verify_fix", c.def.setup, true, "", false);
+}
+
 static void execute(Service &s, Case &c, std::string_view kind) {
     ResolvedTool t;
     if (!resolve_tool(*s.scripts, kind, t)) return;
@@ -664,18 +679,11 @@ void on_case_call_done(Service &s, ModelCall &call, long http, CURLcode rc) {
             });
             return;
         }
-        // Verification runs the build without the planted change: the reference fix, or the agent-written fix.
-        FixedString<kNameBytes> action_id;
-        action_id_for(action_id, c);
-        PathText dir;
-        job_dir(dir, s, action_id.view());
-        bool ok = emit(s, c, "action_requested", [&](EventLine &b) {
-            cat(b, "{\"action_id\":", json_string(action_id.view()), ",\"kind\":\"verify_fix\",\"label\":\"");
-            if (c.fix_rev.empty()) b.add("verification run with the reference fix on setup ");
-            else b.add("verification run with agent-written fix ").escaped(c.fix_rev.view()).add(" on setup ");
-            cat(b, c.def.setup, "\",\"job\":true,\"dir\":", json_string(dir.view()), "}");
-        });
-        if (ok) queue_job(s, c, action_id.view(), "verify_fix", c.def.setup, true, "", false);
+        // Delivery after a supported diagnosis is a fixed pipeline, not a model choice:
+        // regression check -> fix -> pull request -> verification run.
+        ResolvedTool t;
+        if (resolve_tool(*s.scripts, "write_test", t)) execute(s, c, "write_test");
+        else start_verification(s, c);
     } else if (call.kind == CallKind::stop_note) {
         emit(s, c, "stopped", [&](EventLine &b) {
             cat(b, "{\"reason\":\"The available tools cannot establish more.\",\"missing\":", json_string(content), "}");
@@ -723,6 +731,12 @@ void agent_tick(Service &s) {
             } else if (p.script) {
                 ingest_script(s, c, p);
                 request_thought(s, c);
+                if (c.concluded) {
+                    ResolvedTool t;
+                    if (p.kind == "write_test" && resolve_tool(*s.scripts, "write_fix", t)) execute(s, c, "write_fix");
+                    else if (p.kind == "write_fix" && !c.fix_rev.empty() && resolve_tool(*s.scripts, "open_pr", t)) execute(s, c, "open_pr");
+                    else start_verification(s, c);
+                }
             } else {
                 ingest_job(s, c, p);
                 request_thought(s, c);
@@ -821,6 +835,7 @@ Case *open_case(Service &s, const CaseDef &def, std::string_view channel, std::s
     bool ok = emit(s, *c, "case_opened", [&](EventLine &b) {
         cat(b, "{\"title\":", json_string(def.title.view()), ",\"setup\":\"", def.setup, "\",\"report\":", json_string(def.report.view()));
         if (!def.difficulty.empty()) cat(b, ",\"difficulty\":", json_string(def.difficulty.view()));
+        if (!def.rev.empty()) cat(b, ",\"rev\":", json_string(def.rev.view()), ",\"rev_good\":", json_string(def.rev_good.view()));
         if (!channel.empty()) cat(b, ",\"channel\":", json_string(channel));
         if (!user.empty()) cat(b, ",\"user\":", json_string(user));
         b.add('}');

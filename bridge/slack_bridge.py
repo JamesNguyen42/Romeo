@@ -38,6 +38,7 @@ web = WebClient(token=os.environ["SLACK_BOT_TOKEN"])
 BOT_USER = web.auth_test()["user_id"]
 lock = threading.Lock()
 state = json.loads(STATE.read_text()) if STATE.exists() else {"threads": {}}
+chat_cases = set()  # cases opened from Slack: their thread is the reporter's message, saved by on_message
 
 
 def save():
@@ -53,10 +54,14 @@ def api(method, path, body=None, timeout=60):
 
 def post(case_id, text, broadcast=False):
     """Post into the case's thread, creating the thread on first use."""
+    for _ in range(20):  # a case opened from Slack gets its thread from on_message; wait for that instead of starting a new one
+        if case_id not in chat_cases or case_id in state["threads"]:
+            break
+        time.sleep(0.25)
     with lock:
         t = state["threads"].get(case_id)
         if not t:
-            if not REPORT_CHANNEL:
+            if not REPORT_CHANNEL or case_id in chat_cases:
                 return
             first = web.chat_postMessage(channel=REPORT_CHANNEL, text=text)
             state["threads"][case_id] = {"channel": REPORT_CHANNEL, "ts": first["ts"]}
@@ -137,7 +142,9 @@ TOOL_WORDS = {"write_test": ":test_tube: *Wrote a regression check*", "write_fix
 
 def on_event(e):
     cid, typ, d = e.get("case"), e.get("type"), e.get("data", {})
-    if typ == "case_opened" and cid not in state["threads"]:
+    if typ == "case_opened" and d.get("channel"):
+        chat_cases.add(cid)
+    elif typ == "case_opened" and cid not in state["threads"]:
         post(cid, f":inbox_tray: *{cid}* — {d.get('title', '')}\n>{d.get('report', '')[:400]}")
     elif typ == "decision":
         top = ", ".join(f"{c.get('label', c['action'])} {c['p']:.2f}" for c in d.get("candidates", [])[:3])

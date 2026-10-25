@@ -299,6 +299,8 @@ void apply(Case &c, yyjson_val *ev) {
         if (yyjson_get_str(yyjson_obj_get(d, "setup"))) c.def.setup = str_of(d, "setup").empty() ? 'A' : str_of(d, "setup")[0];
         if (yyjson_get_str(yyjson_obj_get(d, "report"))) assign_logged(c.def.report, str_of(d, "report"), c, "report");
         if (yyjson_get_str(yyjson_obj_get(d, "difficulty"))) assign_logged(c.def.difficulty, str_of(d, "difficulty"), c, "difficulty");
+        if (yyjson_get_str(yyjson_obj_get(d, "rev"))) assign_logged(c.def.rev, str_of(d, "rev"), c, "rev");
+        if (yyjson_get_str(yyjson_obj_get(d, "rev_good"))) assign_logged(c.def.rev_good, str_of(d, "rev_good"), c, "rev_good");
     } else if (type == "action_requested") {
         std::string_view id = str_of(d, "action_id");
         Pending *p = const_cast<Pending *>(c.find_pending(id));
