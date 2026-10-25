@@ -40,7 +40,7 @@ export ROMEO_DATA="${ROMEO_DATA:-$root/runs/story-ui}"
 mkdir -p "$ROMEO_DATA"
 exec 9>"$ROMEO_DATA/.launcher.lock"
 if ! flock -n 9; then
-  echo "Another Romeo launcher is already using $ROMEO_DATA. Saved cases were not changed." >&2
+  echo "Another Juliet launcher is already using $ROMEO_DATA. Saved cases were not changed." >&2
   echo 'Stop that service, or choose a separate ROMEO_DATA directory for a concurrent instance.' >&2
   exit 1
 fi
@@ -50,6 +50,6 @@ export ROMEO_CASES="$root/cases/cases.json"
 export ROMEO_TOOLS="${ROMEO_TOOLS:-$root/runs/story-ui-tools}"
 export ROMEO_THINK="${ROMEO_THINK:-0}"
 mkdir -p "$ROMEO_TOOLS"
-printf 'Story UI and API: http://localhost:%s\nSaved runs: %s\n' "$ROMEO_PORT" "$ROMEO_DATA"
+printf 'Juliet story UI and API: http://localhost:%s\nSaved runs: %s\n' "$ROMEO_PORT" "$ROMEO_DATA"
 echo 'Startup creates no cases and runs no tests. Keep this terminal open; Ctrl+C stops the service.'
 exec "$build/romeo"

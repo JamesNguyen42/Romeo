@@ -34,6 +34,6 @@ if ($BuildDirectory) {
     $launcherArguments += "ROMEO_BUILD_DIR=$BuildDirectory"
 }
 $launcherArguments += @('bash', "$linuxRepo/ui/start-local.sh", '--ui-built')
-Write-Host "Starting the story UI and API in $Distro. Keep this terminal open; Ctrl+C stops the service."
+Write-Host "Starting Juliet's story UI and API in $Distro. Keep this terminal open; Ctrl+C stops the service."
 & wsl.exe @launcherArguments
-if ($LASTEXITCODE -ne 0) { throw "Romeo exited with code $LASTEXITCODE. See the message above." }
+if ($LASTEXITCODE -ne 0) { throw "Juliet exited with code $LASTEXITCODE. See the message above." }

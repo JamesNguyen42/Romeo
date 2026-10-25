@@ -1,11 +1,11 @@
 {
-  "name": "romeo-original-story",
+  "name": "juliet-original-story",
   "version": "1.0.0",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "node build.mjs",
-    "test": "node --test story/live-data.test.js"
+    "test": "node --test story/live-data.test.js story/tool-story.test.js"
   },
   "engines": { "node": ">=22.12.0" }
 }

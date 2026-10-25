@@ -1,5 +1,5 @@
 {
-  "name": "romeo-story",
+  "name": "juliet-story",
   "private": true,
   "scripts": {
     "start": "node ui/start-local.mjs"

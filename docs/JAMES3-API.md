@@ -1,6 +1,6 @@
-# James3 renderer UI API
+# Juliet renderer UI API (James3)
 
-The UI runs the existing renderer and reads its measurements and images. It has no crosswalk detector, camera feed, or held-out image dataset. A new view seed changes the rendered camera view; it does not establish that a model has never seen an image.
+Juliet runs the existing renderer and reads its measurements and images. It has no crosswalk detector, camera feed, or held-out image dataset. A new view seed changes the rendered camera view; it does not establish that a model has never seen an image. Existing `romeo`/`romeo-render` binary names, `ROMEO_*` settings and API paths are retained for compatibility.
 
 ## Build and start
 

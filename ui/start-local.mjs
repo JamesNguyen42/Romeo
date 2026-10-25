@@ -10,7 +10,7 @@ const args = windows
 
 const child = spawn(command, args, { cwd: root, stdio: 'inherit', windowsHide: true });
 child.on('error', error => {
-  console.error(`Could not start Romeo: ${error.message}`);
+  console.error(`Could not start Juliet: ${error.message}`);
   process.exitCode = 1;
 });
 child.on('exit', (code, signal) => { process.exitCode = code ?? (signal ? 1 : 0); });

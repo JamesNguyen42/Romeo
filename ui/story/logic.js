@@ -1,27 +1,25 @@
 const STEPS = [
   {short:'What went wrong',tech:'case_opened'},
   {short:'What it saw',tech:'action_result'},
-  {short:'Weighed options',tech:'decision'},
+  {short:'Picked tools',tech:'decision → action → fact'},
   {short:'Ran a test',tech:'action_result'},
   {short:'Restart',tech:'restarted'},
   {short:'What it found',tech:'comparison_complete / conclusion'},
-  {short:'Not proven yet',tech:'stopped'}
+  {short:'Still untested',tech:'stopped'}
 ];
 const POS = [[190,110],[390,110],[590,110],[790,110],[790,250],[990,110],[990,250]];
 const INPUTS = ['Report','Measurements','Saved evidence'];
-const ACTIONS = {measure_frames:'Measure frame times',compare_baseline:'Compare the baseline',capture_trace:'Look inside the slowdown',measure_memory:'Watch memory use',compare_images:'Compare the pictures',fetch_logs:'Read the error log',inspect_config:'Check the settings',try_smaller_setup:'Try fewer cameras',check_disk:'Check disk use',conclude:'Explain the cause',stop_need_more:'Ask for more evidence',verify_fix:'Check the proposed fix'};
 const fmt = (value,unit='') => typeof value==='number' && Number.isFinite(value) ? value.toLocaleString(undefined,{maximumFractionDigits:1})+(unit?' '+unit:'') : '—'+(unit?' '+unit:'');
 const lastEvent = (events,type) => [...events].reverse().find(e=>e.type===type);
-const actionLabel = action => ACTIONS[action] || String(action||'').replaceAll('_',' ');
 const actualStatus = c => !c ? 'Not started' : c.status==='done' ? 'Run finished' : c.status==='stopped' ? 'Needs evidence' : 'Running';
 
 class Component extends DCLogic {
-  state = {i:0,t:0,playing:false,scenarioId:'',side:'current',live:{connected:false,ready:false,error:'',scenarios:[],cases:[],selectedId:'',selected:null,runs:[],loading:false,starting:false}};
+  state = {i:0,t:0,playing:false,toolRound:null,toolsPlayback:false,scenarioId:'',side:'current',live:{connected:false,ready:false,error:'',scenarios:[],cases:[],selectedId:'',selected:null,runs:[],loading:false,starting:false}};
   componentDidMount() {
     this.disposed=false;
     this.store=new LiveStore(live=>{
       if(this.disposed)return;
-      const change=live.selected?.scenario_id && live.selected.id!==this.state.live.selected?.id ? {scenarioId:live.selected.scenario_id} : {};
+      const change=live.selected?.scenario_id && live.selected.id!==this.state.live.selected?.id ? {scenarioId:live.selected.scenario_id,toolRound:null,toolsPlayback:false,t:0} : {};
       this.setState({live,...change});
       this.chartKey='';
     });
@@ -39,18 +37,21 @@ class Component extends DCLogic {
     this.tick=setInterval(()=>{
       const now=performance.now(),dt=Math.min(0.1,(now-previous)/1000);previous=now;
       if(this.state.playing)this.setState(s=>{
-        const t=s.t+dt,dur=this.props.seconds??7;
-        if(t>dur)return s.i<6?{i:s.i+1,t:0}:{playing:false,t:dur};
+        const t=s.t+dt,dur=this.duration(s.i);
+        if(t>dur)return s.i<6?{i:s.i+1,t:0,toolRound:null,toolsPlayback:s.i+1===2}:{playing:false,t:dur};
         return {t};
       });
       if(this.state.i===1)this.drawCharts();
     },33);
   }
   componentWillUnmount(){this.disposed=true;this.store?.stop();clearInterval(this.tick);window.removeEventListener('keydown',this.onKey);window.removeEventListener('resize',this.onResize);}
-  go(i){this.chartKey='';this.setState({i:Math.max(0,Math.min(6,i)),t:0});}
-  togglePlay(){this.setState(s=>s.playing?{playing:false}:{playing:true,...(s.i===6?{i:0,t:0}:{})});}
-  chooseScenario(e){this.store.select('');this.setState({scenarioId:e.target.value,i:0,t:0,playing:false});}
-  chooseRun(e){this.setState({i:0,t:0,playing:false});this.store.select(e.target.value);}
+  duration(i){return i===2?Math.max(1,(this.state.live.selected?.events||[]).filter(e=>e.type==='decision').length)*4:(this.props.seconds??7);}
+  go(i){this.chartKey='';const next=Math.max(0,Math.min(6,i));this.setState({i:next,t:0,toolRound:null,toolsPlayback:this.state.playing&&next===2});}
+  togglePlay(){this.setState(s=>s.playing?{playing:false}:{playing:true,...(s.i===6?{i:0,t:0,toolsPlayback:false}:s.i===2?{toolsPlayback:true,toolRound:null,t:s.toolsPlayback?s.t:(s.toolRound??0)*4}:{})});}
+  goToolRound(delta){const story=this.toolStory();this.setState({playing:false,toolsPlayback:false,toolRound:Math.max(0,Math.min(story.roundCount-1,story.roundIndex+delta)),t:0});}
+  toolStory(){const s=this.state;return buildToolStory({selected:s.live.selected,roundIndex:s.toolsPlayback?Math.floor(s.t/4):s.toolRound,progress:s.toolsPlayback?(s.t%4)/4:1});}
+  chooseScenario(e){this.store.select('');this.setState({scenarioId:e.target.value,i:0,t:0,playing:false,toolRound:null,toolsPlayback:false});}
+  chooseRun(e){this.setState({i:0,t:0,playing:false,toolRound:null,toolsPlayback:false});this.store.select(e.target.value);}
   async run(mode='comparison',fresh=false){
     const scenarioId=this.state.scenarioId || this.state.live.selected?.scenario_id;
     if(!scenarioId||this.state.live.starting)return;
@@ -91,7 +92,7 @@ class Component extends DCLogic {
     this.chartKey=this.state.live.selectedId;
   }
   renderVals(){
-    const {i,t,playing,live,side}=this.state,dur=this.props.seconds??7;
+    const {i,t,playing,live,side}=this.state,dur=this.duration(i);
     const selected=live.selected,events=selected?.events||[];
     const {current,baseline}=this.relevantRuns();
     const scenarioId=this.state.scenarioId||selected?.scenario_id||'';
@@ -104,11 +105,11 @@ class Component extends DCLogic {
     const imageSource=current?.event.data.source==='fixture'?'Fixture':current?.image?'Real render':'No image yet';
     const report=opened?.data.report||selected?.report||scenario?.report;
     const captions=[
-      {line:report||'Choose a run to see its story.',why:report?'The report gives Romeo something concrete to check.':'Open Live controls below. Nothing runs until you press Run test.'},
+      {line:report||'Choose a run to see its story.',why:report?'The report gives Juliet something concrete to check.':'Open Live controls below. Nothing runs until you press Run test.'},
       {line:current?.summary?'The picture and the measurements came from the renderer.':'No measured result has arrived yet.',why:'Images, timing and memory describe the same run.'},
-      {line:decision?'It chose the next check from the evidence.':comparison?'This run followed a direct comparison.':'No model decision has been recorded.',why:decision?'The bars show the model’s actual tool-choice probabilities.':comparison?'No model probabilities were needed for this test.':'Decision bars stay empty until Clef responds.'},
+      {line:decision?'Clef picks one tool. Juliet runs it and saves what it finds.':comparison?'This run followed a direct comparison.':'The next tool depends on the evidence so far.',why:decision?'Each saved result gives the next choice more evidence. The scores show tool choice, not certainty about a cause.':comparison?'The renderer checks the affected version and its baseline. No model choice is needed.':'Clef scores the options the service offers. A score appears only after a real decision.'},
       {line:(side==='baseline'?baseline:current)?.preview?'These are the saved frames from the run.':'The replay images have not arrived yet.',why:'The renderer re-creates sampled frames after timing. Each badge shows the recorded frame time.'},
-      {line:restart?'Romeo recovered the saved case after a restart.':'No restart has been recorded for this case.',why:restart?'The saved record keeps completed work and any pending actions.':'This scene only changes when a restart event arrives.'},
+      {line:restart?'Juliet recovered the saved case after a restart.':'No restart has been recorded for this case.',why:restart?'The saved record keeps completed work and any pending actions.':'This scene only changes when a restart event arrives.'},
       {line:stopped?stopped.data.reason||'More evidence is needed.':conclusion?conclusion.data.diagnosis:measured?'The affected render and its baseline are ready to compare.':'The comparison is not ready yet.',why:stopped?stopped.data.missing||'Check the saved evidence.':conclusion?conclusion.data.fix||'Check the evidence before accepting a fix.':measured?'Both sides use the same setup and camera path. A comparison alone does not prove a fix.':'No result is assumed before the renderer finishes.'},
       {line:'One run does not cover every scene.',why:current?.preview?'These pictures are sampled views from this run. Other scenes and setups still need checks.':'The test pictures stay empty until there is real renderer output.'}
     ];
@@ -116,8 +117,7 @@ class Component extends DCLogic {
     const P=(x,y,w,h)=>({l:x/11.5+'%',t:y/3.6+'%',w:w/11.5+'%',h:h/3.6+'%'});
     const steps=STEPS.map((s,k)=>{const active=k===i,past=k<i,[x,y]=POS[k];return{...s,...(active?P(x-9,y-4,168,80):P(x,y,150,72)),num:String(k+1).padStart(2,'0'),bg:active?'var(--color-accent)':past?'var(--color-text)':'var(--color-bg)',fg:active||past?'#fff':'var(--color-text)',border:active?'var(--color-accent)':'var(--color-text)',progressPct:(active?Math.min(100,t/dur*100):0)+'%',go:()=>this.go(k)};});
     const inputs=INPUTS.map((label,k)=>({...P(190+k*200,10,150,54),label,stroke:k===i?'var(--color-accent)':'var(--color-text)'}));
-    const candidates=Array.isArray(decision?.data.candidates)?decision.data.candidates:[];
-    const bars=candidates.filter(c=>typeof c.p==='number'&&Number.isFinite(c.p)).map(c=>({label:c.label||actionLabel(c.action),pct:fmt(c.p*100,'%'),w:Math.max(0,Math.min(100,c.p*100))+'%',color:c.action===decision.data.chosen?'var(--color-accent)':'var(--color-neutral-400)',weight:c.action===decision.data.chosen?800:500}));
+    const toolStory=this.toolStory();
     const replay=side==='baseline'?baseline:current,rawFrames=Array.isArray(replay?.preview?.frames)?replay.preview.frames:[];
     const imageFor=f=>replay?.event.data.action_id&&f?.file?liveArtifactUrl(selected.id,replay.event.data.action_id+'/'+f.file,this.store?.base||''):undefined;
     const active=rawFrames.length?Math.floor(t/0.16)%rawFrames.length:-1;
@@ -130,14 +130,14 @@ class Component extends DCLogic {
     const busy=!!selected&&!['done','stopped'].includes(selected.status);
     return{
       steps,inputs,cur,showTech:!!this.props.showTech,atStart:i===0,atEnd:i===6,prev:()=>this.go(i-1),next:()=>this.go(i+1),togglePlay:()=>this.togglePlay(),playLabel:playing?'Pause':'Play',
-      caseLabel:selected?'Romeo · '+(selected.scenario_id||selected.id)+' · Renderer':'Romeo · No run selected',caseTitle:selected?.title||scenario?.title||'Renderer case story',
+      caseLabel:selected?'Juliet · '+(selected.scenario_id||selected.id)+' · Renderer':'Juliet · No run selected',caseTitle:selected?.title||scenario?.title||'Renderer case story',
       imageSrc,hasImage:!!imageSrc,noImage:!imageSrc,imageSource,pictureStatus:live.loading?'Loading saved evidence…':selected?'Waiting for renderer output':'Choose a run to see its picture',runStatus:current?.event.data.source==='fixture'?'Fixture evidence':actualStatus(selected),
       typical:fmt(current?.summary?.p50_ms,'ms'),slowest:fmt(current?.summary?.max_ms,'ms'),memory:fmt(typeof current?.summary?.resident_end_bytes==='number'?current.summary.resident_end_bytes/1048576:undefined,'MiB'),blink:playing?0.45+0.55*Math.abs(Math.sin(t*3)):1,
-      bars,noDecision:!bars.length,decisionStatus:comparison?'No model decision requested':stopped?'Model decision unavailable':'Waiting for a real decision',
+      ...toolStory,toolGroups:toolStory.groups,hasToolRounds:toolStory.roundCount>0,previousToolRound:()=>this.goToolRound(-1),nextToolRound:()=>this.goToolRound(1),atFirstToolRound:toolStory.roundIndex<=0,atLastToolRound:toolStory.roundIndex>=toolStory.roundCount-1,
       frames,framesDone:rawFrames.length,framesTotal:40,showCurrent:()=>this.setState({side:'current',t:0}),showBaseline:()=>this.setState({side:'baseline',t:0}),replaySideLabel:side==='baseline'?'Baseline frames':'Affected frames',
       screenText:restart?'Recovered saved case':'No restart recorded',screenBg:restart?'var(--color-text)':'var(--color-bg)',screenFg:restart?'var(--color-bg)':'var(--color-text)',savedLabel:events.length+' events saved',recordStatus:selected?'Saved case record':'No case selected',pendingLabel:pending.size+' actions waiting',
       compare,findingA:current?.summary?fmt(current.summary.p50_ms,'ms')+' affected':'Affected: —',findingB:baseline?.summary?fmt(baseline.summary.p50_ms,'ms')+' baseline':'Baseline: —',findingResult:measured?'Compare the evidence':'Not measured',unknowns,
-      connectionLabel:live.connected?'Connected to Romeo':'Waiting for Romeo',evidenceLabel:selected?selected.id+(live.runs.some(r=>r.event.data.source==='fixture')?' · Contains fixture evidence':''):'No test has been started',hasError:!!(live.error||live.runs.find(r=>r.error)?.error),error:live.error||live.runs.find(r=>r.error)?.error||'',
+      connectionLabel:live.connected?'Connected to Juliet':'Waiting for Juliet',evidenceLabel:selected?selected.id+(live.runs.some(r=>r.event.data.source==='fixture')?' · Contains fixture evidence':''):'No test has been started',hasError:!!(live.error||live.runs.find(r=>r.error)?.error),error:live.error||live.runs.find(r=>r.error)?.error||'',
       hasCase:!!selected,exportUrl:selected?'/api/cases/'+encodeURIComponent(selected.id)+'/export':undefined,scenarioId,scenarios:live.scenarios,cases:live.cases.map(c=>({...c,label:c.title+' · '+c.id})),selectedId:live.selectedId,
       selectScenario:e=>this.chooseScenario(e),selectRun:e=>this.chooseRun(e),runTest:()=>this.run(),newAngles:()=>this.run('comparison',true),investigate:()=>this.run('investigation'),refresh:()=>this.store.refresh(),cannotRun:!live.connected||!scenarioId||live.starting||busy,runButton:live.starting?'Starting…':busy?'Running…':'Run test'
     };
