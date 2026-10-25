@@ -47,7 +47,8 @@ def ornith(system, user, max_tokens=1200, think=False):
             "chat_template_kwargs": {"enable_thinking": think},
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
     req = urllib.request.Request(ORNITH, json.dumps(body).encode(), {"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=300) as r:
+    # Long generations at eager-mode speed (about 13 tok/s) need minutes; stay under the service's 20-minute script limit.
+    with urllib.request.urlopen(req, timeout=min(1140, max(300, 120 + max_tokens // 10))) as r:
         resp = json.loads(r.read())
     msg = resp["choices"][0]["message"]
     for k in ("prompt_tokens", "completion_tokens"):
