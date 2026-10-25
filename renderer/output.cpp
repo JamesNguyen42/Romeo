@@ -288,6 +288,8 @@ bool write_summary(const char *path, const RunSummary &s) {
     b.add(",\"tile\":").num(s.tile).add(",\"p50_ms\":").num(s.p50_ms, 3).add(",\"p95_ms\":").num(s.p95_ms, 3);
     b.add(",\"p99_ms\":").num(s.p99_ms, 3).add(",\"max_ms\":").num(s.max_ms, 3).add(",\"spike_frames\":").num(s.spike_frames);
     b.add(",\"resident_end_bytes\":").num(s.resident_end_bytes).add(",\"cache_entries\":").num(s.cache_entries);
-    b.add(",\"tmp_bytes\":").num(s.tmp_bytes).add(",\"total_ms\":").num(s.total_ms, 1).add("}\n");
+    b.add(",\"tmp_bytes\":").num(s.tmp_bytes).add(",\"total_ms\":").num(s.total_ms, 1);
+    b.add(",\"view_seed\":").num(s.view_seed).add(",\"warmup_frames\":").num(s.warmup_frames);
+    b.add(",\"measured_frames\":").num(s.measured_frames).add("}\n");
     return !b.overflowed() && write_file(path, b.data, b.len);
 }

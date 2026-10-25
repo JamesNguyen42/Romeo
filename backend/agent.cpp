@@ -101,6 +101,7 @@ static bool write_tool_input(Service &s, const Case &c, std::string_view action_
 
 // The revision a renderer job builds, or empty for the --bug path.
 static std::string_view job_revision(const Case &c, const SpawnRequest &r) {
+    if (c.def.comparison) return {}; // Explicit comparison uses the local renderer's planted bug flags.
     const bool verify = r.kind == "verify_fix";
     if (verify && !c.fix_rev.empty()) return c.fix_rev.view();
     if (c.def.rev.empty()) return {};
@@ -127,8 +128,7 @@ static bool start_job(Service &s, Case &c, const SpawnRequest &r) {
         shell_quoted(cmd, rev);
         cat(cmd, ") && exec \"$bin\" --setup ", r.setup, " --frames ", s.cfg.frames, ' ', r.args, " --out ", dir);
     } else {
-        const CaseDef *def = find_def(*s.store, c.def.id.view());
-        std::string_view bugs = def ? def->bugs.view() : std::string_view();
+        std::string_view bugs = c.def.bugs.view();
         cat(cmd, "exec ", s.cfg.render_abs, " --setup ", r.setup, " --frames ", s.cfg.frames, ' ', r.args);
         if (!(r.baseline || bugs.empty())) cat(cmd, " --bug ", bugs);
         cat(cmd, " --out ", dir);
@@ -373,6 +373,13 @@ static void execute(Service &s, Case &c, std::string_view kind) {
 
 // ---------------------------------------------------------------- ingest
 
+static void write_metrics(EventLine &b, const Summary &sum) {
+    cat(b, "{\"p50_ms\":", decimal(sum.p50, 4), ",\"p95_ms\":", decimal(sum.p95, 4), ",\"p99_ms\":", decimal(sum.p99, 4),
+        ",\"max_ms\":", decimal(sum.max, 4), ",\"total_ms\":", decimal(sum.total_ms, 4), ",\"spike_frames\":", sum.spikes,
+        ",\"views\":", sum.views, ",\"frames\":", sum.frames, ",\"resident_end_bytes\":", uint64_t(sum.resident_mb * 1048576.0),
+        ",\"tmp_bytes\":", uint64_t(sum.tmp_mb * 1048576.0), ",\"cache_entries\":", sum.cache, "}");
+}
+
 static void ingest_job(Service &s, Case &c, const Pending &p) {
     std::string_view dir = p.dir.view();
     const int code = read_exit_code(s, dir);
@@ -403,7 +410,8 @@ static void ingest_job(Service &s, Case &c, const Pending &p) {
     }
 
     FixedStringBuilder<64> label;
-    cat(label, baseline ? "Previous build" : "Current build", ", setup ", setup);
+    cat(label, c.def.comparison ? (baseline ? "Baseline renderer" : "Renderer with the scenario") : (baseline ? "Previous build" : "Current build"),
+        ", setup ", setup);
     EvidenceText text;
     if (p.kind == "measure_memory") describe_memory_run(s, dir, label.view(), sum, text);
     else if (p.kind == "capture_trace") describe_trace_run(s, dir, label.view(), sum, text);
@@ -411,8 +419,10 @@ static void ingest_job(Service &s, Case &c, const Pending &p) {
 
     emit(s, c, "action_result", [&](EventLine &b) {
         result_head(b);
+        b.add(",\"metrics\":");
+        write_metrics(b, sum);
         cat(b, ",\"summary\":", json_string(text.view()), ",\"artifacts\":");
-        write_artifacts(b, s, p.action_id.view(), {"frames.csv", "memory.csv", "trace.json", "image.png", "log.jsonl"});
+        write_artifacts(b, s, p.action_id.view(), {"summary.json", "frames.csv", "memory.csv", "trace.json", "image.png", "preview.json", "log.jsonl"});
         b.add('}');
     });
     FixedStringBuilder<1024> arts;
@@ -501,7 +511,7 @@ static void finish_verification(Service &s, Case &c, const Pending &p) {
     const Summary b = before ? read_summary(s, before->dir.view()) : Summary{};
 
     FixedStringBuilder<2048> checks, line;
-    cat(line, "Run with the reference fix exits ");
+    cat(line, c.fix_rev.empty() ? "Run with the reference fix exits " : "Run with the agent-written fix exits ");
     if (code == 0) line.add("cleanly");
     else cat(line, "with code ", code);
     cat(checks, '[', json_string(line.view()));
@@ -518,15 +528,24 @@ static void finish_verification(Service &s, Case &c, const Pending &p) {
 
     emit(s, c, "action_result", [&](EventLine &e) {
         cat(e, "{\"action_id\":", json_string(p.action_id.view()), ",\"source\":\"run\",\"run_dir\":", json_string(p.dir.view()),
-            ",\"baseline\":true,\"summary\":\"verification run finished\",\"artifacts\":");
-        write_artifacts(e, s, p.action_id.view(), {"frames.csv", "image.png"});
+            ",\"baseline\":true,\"exit_code\":", code, ",\"success\":", code == 0 && after.ok ? "true" : "false",
+            ",\"summary\":\"verification run finished\",\"artifacts\":");
+        write_artifacts(e, s, p.action_id.view(), {"summary.json", "frames.csv", "image.png", "stdout.txt"});
         e.add('}');
     });
+    if (code != 0 || !after.ok) {
+        emit(s, c, "stopped", [&](EventLine &e) {
+            cat(e, "{\"reason\":\"Verification failed.\",\"missing\":",
+                json_string(code != 0 ? "A verification run that exits successfully." : "A complete, valid verification summary."),
+                ",\"checks\":", checks, "}");
+        });
+        return;
+    }
     FixedStringBuilder<256> verified;
     if (c.fix_rev.empty()) verified.add("reference fix (planted change removed)");
     else cat(verified, "agent-written fix ", c.fix_rev);
     emit(s, c, "done", [&](EventLine &e) {
-        cat(e, "{\"summary\":", json_string(c.diagnosis.view()), ",\"checks\":", checks, ",\"verified_with\":", json_string(verified.view()), "}");
+        cat(e, "{\"summary\":", json_string(c.diagnosis.view()), ",\"success\":true,\"checks\":", checks, ",\"verified_with\":", json_string(verified.view()), "}");
     });
 }
 
@@ -554,11 +573,16 @@ void on_case_call_done(Service &s, ModelCall &call, long http, CURLcode rc) {
     if (rc != CURLE_OK || http != 200 || !doc) {
         if (call.kind != CallKind::think) {
             FixedStringBuilder<512> text;
-            text.add("Model call failed (");
+            text.add(call.kind == CallKind::decide ? "Clef could not answer (" : "Ornith could not answer (");
             if (rc != CURLE_OK) text.add(curl_easy_strerror(rc));
             else cat(text, "HTTP ", http);
-            text.add("); will retry on the next step.");
-            emit_fact(s, c, text.view());
+            text.add(").");
+            emit(s, c, "stopped", [&](EventLine &e) {
+                cat(e, "{\"reason\":", json_string(text.view()), ",\"missing\":",
+                    json_string(call.kind == CallKind::decide
+                        ? "Start the configured Clef service, then start a new investigation. Measured comparisons do not need a model."
+                        : "Start the configured Ornith service, then start a new investigation."), "}");
+            });
         }
         return;
     }
@@ -567,6 +591,18 @@ void on_case_call_done(Service &s, ModelCall &call, long http, CURLcode rc) {
         yyjson_val *answer = yyjson_obj_get(yyjson_obj_get(root, "answers"), "next_action");
         yyjson_val *probs = yyjson_obj_get(answer, "probabilities");
         std::string_view chosen = json_str(answer, "choice");
+        bool chosen_valid = false, probabilities_valid = yyjson_is_obj(probs);
+        for (const auto &option : call.options) {
+            chosen_valid = chosen_valid || chosen == option.view();
+            yyjson_val *value = yyjson_obj_get(probs, option.c_str());
+            probabilities_valid = probabilities_valid && yyjson_is_num(value) && yyjson_get_num(value) >= 0 && yyjson_get_num(value) <= 1;
+        }
+        if (!chosen_valid || !probabilities_valid) {
+            emit(s, c, "stopped", [&](EventLine &e) {
+                e.add("{\"reason\":\"Clef returned an invalid decision.\",\"missing\":\"A choice from the offered tools and a numeric probability for each tool. No prediction was recorded.\"}");
+            });
+            return;
+        }
         struct Ranked {
             double p;
             std::string_view name;
@@ -635,6 +671,52 @@ void on_case_call_done(Service &s, ModelCall &call, long http, CURLcode rc) {
 
 // ---------------------------------------------------------------- the agent step
 
+// An explicit measurement run does not consult a model or execute script tools. Both builds use
+// the same scene seed and the renderer jobs remain globally serial, just like investigations.
+static void comparison_step(Service &s, Case &c) {
+    const bool current_done = c.is_done("measure_frames"), baseline_done = c.is_done("compare_baseline");
+    if (!current_done || !baseline_done) {
+        const bool baseline = current_done;
+        const std::string_view kind = baseline ? "compare_baseline" : "measure_frames";
+        FixedString<kNameBytes> action_id;
+        action_id_for(action_id, c);
+        PathText dir;
+        job_dir(dir, s, action_id.view());
+        FixedStringBuilder<64> args;
+        cat(args, "--preview-frames 40 --view-seed ", c.def.view_seed);
+        const bool ok = emit(s, c, "action_requested", [&](EventLine &b) {
+            cat(b, "{\"action_id\":", json_string(action_id.view()), ",\"kind\":", json_string(kind),
+                ",\"label\":", json_string(baseline ? "Measuring the baseline" : "Measuring the scenario"), ",\"job\":true,\"dir\":", json_string(dir.view()),
+                ",\"args\":{\"setup\":\"", c.def.setup, "\",\"view_seed\":", c.def.view_seed, ",\"preview_frames\":40}}");
+        });
+        if (ok) queue_job(s, c, action_id.view(), kind, c.def.setup, baseline, args.view(), false);
+        return;
+    }
+
+    const Run *current = nullptr, *baseline = nullptr;
+    for (const Run &run : c.runs) {
+        if (run.kind == "measure_frames") current = &run;
+        if (run.kind == "compare_baseline") baseline = &run;
+    }
+    const Summary a = current ? read_summary(s, current->dir.view()) : Summary{};
+    const Summary b = baseline ? read_summary(s, baseline->dir.view()) : Summary{};
+    const bool ok = current && baseline && a.ok && b.ok && read_exit_code(s, current->dir.view()) == 0 && read_exit_code(s, baseline->dir.view()) == 0;
+    if (!ok) {
+        emit(s, c, "stopped", [&](EventLine &e) {
+            e.add("{\"reason\":\"The comparison could not finish.\",\"missing\":\"Both renderer runs must exit successfully and write complete measurement summaries. Check the run output.\"}");
+        });
+        return;
+    }
+    emit(s, c, "comparison_complete", [&](EventLine &e) {
+        cat(e, "{\"success\":true,\"summary\":\"Both renderer measurements finished. This comparison does not assert a diagnosis or verified fix.\",\"view_seed\":", c.def.view_seed,
+            ",\"current_action_id\":", json_string(current->action_id.view()), ",\"baseline_action_id\":", json_string(baseline->action_id.view()), ",\"current\":");
+        write_metrics(e, a);
+        e.add(",\"baseline\":");
+        write_metrics(e, b);
+        e.add('}');
+    });
+}
+
 void agent_tick(Service &s) {
     CaseStore &store = *s.store;
     const int64_t now = now_ms();
@@ -656,10 +738,10 @@ void agent_tick(Service &s) {
                 finish_verification(s, c, p);
             } else if (p.script) {
                 ingest_script(s, c, p);
-                request_thought(s, c);
+                if (!c.def.comparison) request_thought(s, c);
             } else {
                 ingest_job(s, c, p);
-                request_thought(s, c);
+                if (!c.def.comparison) request_thought(s, c);
             }
             s.evidence.reset();
         }
@@ -669,6 +751,10 @@ void agent_tick(Service &s) {
         // One renderer job at a time keeps frame-time measurements free of interference.
         if (running_jobs(store) > 0) continue;
         ArenaScope scope(s.request);
+        if (c.def.comparison) {
+            comparison_step(s, c);
+            continue;
+        }
         if (c.done.count >= 9) {
             execute(s, c, "stop_need_more");
             continue;
@@ -752,6 +838,11 @@ Case *open_case(Service &s, const CaseDef &def, std::string_view channel, std::s
     bool ok = emit(s, *c, "case_opened", [&](EventLine &b) {
         cat(b, "{\"title\":", json_string(def.title.view()), ",\"setup\":\"", def.setup, "\",\"report\":", json_string(def.report.view()));
         if (!def.difficulty.empty()) cat(b, ",\"difficulty\":", json_string(def.difficulty.view()));
+        cat(b, ",\"scenario_id\":", json_string(def.scenario_id.view()), ",\"mode\":", json_string(def.comparison ? "comparison" : "investigation"),
+            ",\"view_seed\":", def.view_seed, ",\"execution\":{\"bugs\":", json_string(def.bugs.view()), ",\"rev\":", json_string(def.rev.view()),
+            ",\"rev_good\":", json_string(def.rev_good.view()), ",\"rev_good_given\":", def.rev_good_given ? "true" : "false", ",\"withhold\":[");
+        for (uint32_t i = 0; i < def.withhold.count; ++i) cat(b, i ? "," : "", json_string(def.withhold[i].view()));
+        b.add("]}");
         if (!channel.empty()) cat(b, ",\"channel\":", json_string(channel));
         if (!user.empty()) cat(b, ",\"user\":", json_string(user));
         b.add('}');

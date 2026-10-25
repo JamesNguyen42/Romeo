@@ -11,7 +11,8 @@
 //
 // Memory: everything comes from arenas reserved once at start-up and sized from the setup (plan_arenas below).
 // The main arena holds the scene, views, textures, the asset buffer, worker tiles, trace and writer buffers and the
-// per-frame scratch arena. The PNG arena serves stb_image_write once at exit and is then released. cache_leak adds
+// per-frame scratch arena. The PNG arena serves stb_image_write once at exit and is then released. Optional replay
+// images use a separate, bounded arena after benchmark metrics have been saved. cache_leak adds
 // a 2 GiB texture-copy arena. An exhausted arena writes a fatal log line and ends the process with a non-zero
 // status; nothing falls back to the heap.
 
@@ -76,7 +77,9 @@ struct Bugs {
     bool mip_bias = false;      // texture LOD bias changed from 0 to +2.5
 };
 
-constexpr std::string_view kUsage = "usage: romeo-render --setup A..E [--frames N] [--bug a,b] [--trace] [--out dir]\n";
+constexpr std::string_view kUsage = "usage: romeo-render --setup A..E [--frames N] [--bug a,b] [--trace] [--out dir] [--preview-frames 0..40] [--view-seed N]\n";
+constexpr int kMaxPreviewFrames = 40;
+constexpr int kPreviewWidth = 480, kPreviewHeight = 270;
 
 constexpr size_t kAssetBytes = 64u << 20;            // the streamed asset file
 constexpr size_t kTextureCopyArenaBytes = 2ull << 30; // cache_leak copies, reserved address space
@@ -244,6 +247,74 @@ void worker_main(WorkerContext *w) {
     }
 }
 
+// Reproduce selected camera/frame positions at the run's native resolution, then downsample for the gallery.
+// Called only after frames.csv, image.png and summary.json are finished. No replay timing, allocation or PNG
+// encoding contributes to benchmark metrics. This is rendered evidence, not model predictions or held-out data.
+bool write_previews(std::string_view out, int requested, int frames, uint32_t view_seed, const double *frame_ms,
+                    RasterState &raster, TextureCache &textures, FixedArray<WorkerContext, kMaxWorkers> &contexts) {
+    const int views = int(raster.views.count), workers = int(contexts.count);
+    const int width = raster.setup.width, height = raster.setup.height;
+    const uint64_t samples = uint64_t(frames) * uint64_t(views);
+    const int count = int(std::min(uint64_t(requested), samples));
+    const size_t pixel_bytes = size_t(kPreviewWidth) * kPreviewHeight * sizeof(uint32_t);
+    Arena preview = reserve_arena(Arena::budget_bytes(pixel_bytes) + png_scratch_bytes(kPreviewWidth, kPreviewHeight));
+    if (!preview.base) return false;
+    auto *pixels = static_cast<uint32_t *>(preview.alloc_bytes(pixel_bytes));
+
+    // Copies in the planted cache leak contain the same pixels as the immutable pool. Replay uses that pool so
+    // revisiting old variants cannot grow the leak or exhaust the benchmark's texture-copy arena.
+    const bool leaked_cache = textures.leak;
+    textures.leak = false;
+    std::atomic<bool> stop{false};
+    std::barrier<> sync(workers + 1);
+    int frame_view = 0;
+    FixedArray<std::thread, kMaxWorkers> pool;
+    for (int w = 0; w < workers; ++w) {
+        WorkerContext &c = contexts[uint32_t(w)];
+        c.sync = &sync;
+        c.stop = &stop;
+        c.frame_view = &frame_view;
+        c.tracing = false;
+        *pool.push() = std::thread(worker_main, &c);
+    }
+
+    FixedStringBuilder<16384> manifest;
+    manifest.add("{\"version\":1,\"kind\":\"renderer_replay\",\"capture\":\"rerendered_after_benchmark\",\"count\":").num(count);
+    manifest.add(",\"width\":").num(kPreviewWidth).add(",\"height\":").num(kPreviewHeight);
+    manifest.add(",\"source_width\":").num(width).add(",\"source_height\":").num(height);
+    manifest.add(",\"view_seed\":").num(view_seed).add(",\"frames\":[");
+    bool ok = true;
+    for (int i = 0; i < count && ok; ++i) {
+        const uint64_t sample = count == 1 ? samples - 1 : uint64_t(i) * (samples - 1) / uint64_t(count - 1);
+        const int f = int(sample / uint64_t(views)), v = int(sample % uint64_t(views));
+        if (!bin_view(raster, textures, v, f, view_seed)) { ok = false; break; }
+        frame_view = v;
+        sync.arrive_and_wait();
+        sync.arrive_and_wait();
+        const uint32_t *source = raster.views[uint32_t(v)].color;
+        for (int y = 0; y < kPreviewHeight; ++y)
+            for (int x = 0; x < kPreviewWidth; ++x)
+                pixels[size_t(y) * kPreviewWidth + x] = source[size_t(y * height / kPreviewHeight) * width + x * width / kPreviewWidth];
+        FixedStringBuilder<32> name;
+        name.add("preview-");
+        if (i < 10) name.add('0');
+        name.num(i).add(".png");
+        ok = write_png(join_path(out, name.view()).data, pixels, kPreviewWidth, kPreviewHeight, preview);
+        if (i) manifest.add(',');
+        manifest.add("{\"file\":").str(name.view()).add(",\"frame\":").num(f).add(",\"view\":").num(v);
+        manifest.add(",\"camera_angle_rad\":").num(view_camera_angle(v, views, f, view_seed), 7);
+        // The duration is the recorded total for all views in this source frame, not the preview's render time.
+        manifest.add(",\"benchmark_frame_ms\":").num(frame_ms[f], 3).add('}');
+    }
+    stop.store(true);
+    sync.arrive_and_wait();
+    for (std::thread &t : pool) t.join();
+    textures.leak = leaked_cache;
+    release_arena(preview);
+    manifest.add("]}\n");
+    return ok && !manifest.overflowed() && write_file(join_path(out, "preview.json").data, manifest.data, manifest.len);
+}
+
 } // namespace
 
 // ---------------------------------------------------------------- main
@@ -252,6 +323,8 @@ int main(int argc, char **argv) {
     // Command line.
     char setup_name = 'A';
     int frames = 240;
+    int preview_frames = 0;
+    uint32_t view_seed = 0;
     bool trace = false;
     Bugs bugs;
     std::string_view out = "runs/local";
@@ -262,6 +335,18 @@ int main(int argc, char **argv) {
         else if (a == "--frames") frames = std::max(1, std::atoi(next()));
         else if (a == "--out") out = next();
         else if (a == "--trace") trace = true;
+        else if (a == "--preview-frames" || a == "--view-seed") {
+            const std::string_view value = next();
+            uint32_t number = 0;
+            const auto parsed = std::from_chars(value.data(), value.data() + value.size(), number);
+            if (parsed.ec != std::errc() || parsed.ptr != value.data() + value.size() ||
+                (a == "--preview-frames" && number > kMaxPreviewFrames)) {
+                write_stderr(kUsage);
+                return 2;
+            }
+            if (a == "--view-seed") view_seed = number;
+            else preview_frames = int(number);
+        }
         else if (a == "--bug") {
             std::string_view list = next();
             auto has = [&](std::string_view b) { return list.find(b) != std::string_view::npos; };
@@ -295,6 +380,7 @@ int main(int argc, char **argv) {
         FixedStringBuilder<256> x;
         x.add("\"setup\":\"").add(setup->name).add("\",\"views\":").num(setup->views).add(",\"width\":").num(setup->width);
         x.add(",\"height\":").num(setup->height).add(",\"workers\":").num(setup->workers).add(",\"frames\":").num(frames);
+        x.add(",\"view_seed\":").num(view_seed).add(",\"preview_frames\":").num(preview_frames);
         log.line("info", "run_start", x.view());
     }
 
@@ -419,7 +505,7 @@ int main(int argc, char **argv) {
             if (bugs.view_setup)
                 for (Texture &t : textures.base) build_mips(t); // should run once at load, not per view per frame
 
-            if (!bin_view(raster, textures, v, f)) {
+            if (!bin_view(raster, textures, v, f, view_seed)) {
                 // cache_leak ran the texture-copy arena dry: the realistic end of an unbounded leak.
                 FixedStringBuilder<512> x;
                 x.add("\"arena\":\"texture_copies\",\"used_bytes\":").num(textures.copies.used);
@@ -507,7 +593,18 @@ int main(int argc, char **argv) {
         s.cache_entries = textures.entries();
         s.tmp_bytes = tmp_bytes;
         s.total_ms = ms_since(log.t0);
+        s.view_seed = view_seed;
+        s.warmup_frames = int(skip);
+        s.measured_frames = int(n);
         write_summary(join_path(out, "summary.json").data, s);
+    }
+    if (preview_frames) {
+        log.line("info", "preview_start");
+        if (!write_previews(out, preview_frames, frames, view_seed, frame_ms, raster, textures, worker_ctx)) {
+            ::unlink(asset_path.data);
+            fatal_setup(log, "preview_failed", "\"file\":\"preview.json\"");
+        }
+        log.line("info", "preview_end");
     }
     log.line("info", "run_end");
     ::unlink(asset_path.data);

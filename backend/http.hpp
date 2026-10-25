@@ -43,6 +43,8 @@ struct Conn {
 // Last system sample, written by the 1 s sampler and read by GET /api/system without blocking.
 struct Sampler {
     double gpu_util = 0, gpu_power = 0, gpu_temp = 0, gpu_clock = 0;
+    bool gpu_available = false;
+    int64_t gpu_sample_ms = 0;
     long mem_total_kb = 0, mem_avail_kb = 0;
     FixedString<kPathBytes> nvidia_smi; // resolved at start-up; empty when absent
     pid_t pid = -1;
@@ -58,6 +60,7 @@ struct Http {
     uint32_t next_generation = 1;
     uint32_t poll_conn[kConnSlots]; // conn index of each polled fd after the listen socket
     uint32_t poll_count = 0;
+    int64_t next_system_ms = 0;
 };
 
 bool http_init(Service &s, Arena &slots);

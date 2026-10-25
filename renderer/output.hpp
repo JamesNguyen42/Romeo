@@ -127,6 +127,8 @@ struct RunSummary {
     size_t cache_entries;
     uint64_t tmp_bytes;
     double total_ms;
+    uint32_t view_seed;
+    int warmup_frames, measured_frames;
 };
 
 bool write_summary(const char *path, const RunSummary &s);

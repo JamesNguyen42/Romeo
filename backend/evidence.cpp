@@ -207,6 +207,13 @@ Summary read_summary(Service &s, std::string_view dir) {
     yyjson_doc *doc = f.status == ReadStatus::ok ? parse_json(s.evidence, f.bytes) : nullptr;
     if (!doc) return out;
     yyjson_val *r = yyjson_doc_get_root(doc);
+    if (!yyjson_is_obj(r)) return out;
+    for (const char *key : {"p50_ms", "p95_ms", "p99_ms", "max_ms", "total_ms", "spike_frames", "views", "frames",
+                            "resident_end_bytes", "tmp_bytes", "cache_entries"}) {
+        yyjson_val *value = yyjson_obj_get(r, key);
+        if (!yyjson_is_num(value) || yyjson_get_num(value) < 0) return out;
+    }
+    if (yyjson_get_num(yyjson_obj_get(r, "frames")) <= 0 || yyjson_get_num(yyjson_obj_get(r, "views")) <= 0) return out;
     auto n = [&](const char *k) { return yyjson_get_num(yyjson_obj_get(r, k)); };
     out = {n("p50_ms"), n("p95_ms"), n("p99_ms"), n("max_ms"), n("total_ms"), int(n("spike_frames")), int(n("views")), int(n("frames")),
            n("resident_end_bytes") / 1048576.0, n("tmp_bytes") / 1048576.0, size_t(n("cache_entries")), true};

@@ -99,7 +99,7 @@ static std::string_view mime(std::string_view path) {
     size_t dot = name.rfind('.');
     std::string_view e = dot == std::string_view::npos || dot == 0 ? std::string_view() : name.substr(dot);
     return e == ".html" ? "text/html" : e == ".js" ? "text/javascript" : e == ".css" ? "text/css" : e == ".png" ? "image/png"
-           : e == ".json" ? "application/json" : e == ".svg" ? "image/svg+xml" : "text/plain";
+           : e == ".json" ? "application/json" : e == ".svg" ? "image/svg+xml" : e == ".woff2" ? "font/woff2" : "text/plain";
 }
 
 // Streams a regular file. Files longer than limit are cut at limit, like the original read_file().
@@ -123,7 +123,8 @@ static bool respond_file(Conn &c, const char *path, uint64_t limit) {
 static void write_case_summary(Body &b, const Case &c, bool close_object = true) {
     cat(b, "{\"id\":", json_string(c.def.id.view()), ",\"title\":", json_string(c.def.title.view()), ",\"setup\":\"", c.def.setup, "\",\"status\":",
         json_string(status_name(c.status)), ",\"waiting_for\":", json_string(c.waiting_for.view()), ",\"updated_ms\":", c.updated_ms,
-        ",\"event_count\":", c.events.count);
+        ",\"event_count\":", c.events.count, ",\"scenario_id\":", json_string(c.def.scenario_id.view()),
+        ",\"mode\":", json_string(c.def.comparison ? "comparison" : "investigation"), ",\"view_seed\":", c.def.view_seed);
     if (close_object) b.add('}');
 }
 
@@ -148,7 +149,9 @@ static void system_json(Service &s, Body &b) {
         done += c.status == Status::done;
         stopped += c.status == Status::stopped;
     }
-    cat(b, "{\"gpu_util_pct\":", decimal(m.gpu_util, 0), ",\"gpu_power_w\":", decimal(m.gpu_power, 1), ",\"gpu_temp_c\":", decimal(m.gpu_temp, 0),
+    const bool gpu_available = m.gpu_available && now_ms() - m.gpu_sample_ms <= 5000;
+    cat(b, "{\"gpu_available\":", gpu_available ? "true" : "false", ",\"gpu_sample_ms\":", m.gpu_sample_ms,
+        ",\"gpu_util_pct\":", decimal(m.gpu_util, 0), ",\"gpu_power_w\":", decimal(m.gpu_power, 1), ",\"gpu_temp_c\":", decimal(m.gpu_temp, 0),
         ",\"gpu_clock_mhz\":", decimal(m.gpu_clock, 0), ",\"mem_total_gb\":", decimal(double(m.mem_total_kb) / 1e6, 1), ",\"mem_used_gb\":",
         decimal(double(m.mem_total_kb - m.mem_avail_kb) / 1e6, 1), ",\"cases\":{\"investigating\":", investigating, ",\"waiting\":", waiting,
         ",\"done\":", done, ",\"stopped\":", stopped, "},\"running_jobs\":", running_jobs(store), ",\"clef\":{\"decisions\":", store.decisions_total,
@@ -504,6 +507,59 @@ static void handle(Service &s, Conn &conn, const Request &r) {
         system_json(s, *b);
         return respond_json(conn, 200, b->view());
     }
+    if (get && path == "/api/scenarios") {
+        Body *b = body_in_arena(s);
+        if (!b) return respond_too_large(conn);
+        b->add("{\"scenarios\":[");
+        for (uint32_t i = 0; i < store.defs.count; ++i) {
+            const CaseDef &d = store.defs[i];
+            cat(*b, i ? "," : "", "{\"id\":", json_string(d.id.view()), ",\"title\":", json_string(d.title.view()),
+                ",\"report\":", json_string(d.report.view()), ",\"setup\":\"", d.setup, "\",\"difficulty\":", json_string(d.difficulty.view()), "}");
+        }
+        cat(*b, "],\"capacity\":{\"used\":", store.cases.count, ",\"max\":", kMaxCases, "}}");
+        return respond_json(conn, 200, b->view());
+    }
+    if (post && path.starts_with("/api/scenarios/") && path.ends_with("/runs")) {
+        const std::string_view id = path.substr(15, path.size() - 20);
+        const CaseDef *source = find_def(store, id);
+        if (!source) return respond_json(conn, 404, "{\"error\":\"no such scenario\"}");
+        yyjson_val *body = nullptr;
+        if (!r.body.empty()) {
+            body = yyjson_doc_get_root(parse_json(s.request, r.body));
+            if (!yyjson_is_obj(body)) return respond_json(conn, 400, "{\"error\":\"body must be a JSON object\"}");
+        }
+        if (yyjson_val *mode_value = yyjson_obj_get(body, "mode"); mode_value && !yyjson_is_str(mode_value))
+            return respond_json(conn, 400, "{\"error\":\"mode must be comparison or investigation\"}");
+        std::string_view mode = json_str(body, "mode");
+        if (mode.empty()) mode = "comparison";
+        if (mode != "comparison" && mode != "investigation")
+            return respond_json(conn, 400, "{\"error\":\"mode must be comparison or investigation\"}");
+        yyjson_val *seed = yyjson_obj_get(body, "view_seed");
+        if (seed && (!yyjson_is_uint(seed) || yyjson_get_uint(seed) > UINT32_MAX))
+            return respond_json(conn, 400, "{\"error\":\"view_seed must be an unsigned 32-bit integer\"}");
+        if (mode == "investigation" && seed && yyjson_get_uint(seed) != 0)
+            return respond_json(conn, 400, "{\"error\":\"investigations use the original camera; custom view_seed requires comparison mode\"}");
+        if (store.cases.count >= kMaxCases) return respond_json(conn, 503, "{\"error\":\"the case store is full; earlier runs were preserved\"}");
+        CaseDef d = *source;
+        d.scenario_id = source->id;
+        d.comparison = mode == "comparison";
+        d.view_seed = d.comparison
+            ? (seed ? uint32_t(yyjson_get_uint(seed)) : uint32_t(uint64_t(now_ms()) ^ (uint64_t(store.cases.count + 1) * 2654435761u)))
+            : 0;
+        FixedStringBuilder<kNameBytes> run_id;
+        uint32_t suffix = store.cases.count + 1;
+        do {
+            run_id.clear();
+            cat(run_id, "run-", now_ms(), '-', suffix++);
+        } while (find_case(store, run_id.view()));
+        d.id.assign(run_id.view());
+        Case *c = open_case(s, d, "web", "");
+        if (!c) return respond_json(conn, 503, "{\"error\":\"the run could not be recorded\"}");
+        Body *out = body_in_arena(s);
+        if (!out) return respond_too_large(conn);
+        write_case_summary(*out, *c);
+        return respond_json(conn, 200, out->view());
+    }
     if (get && path.substr(0, 11) == "/api/cases/") {
         std::string_view rest = path.substr(11);
         size_t slash = rest.find('/');
@@ -796,6 +852,24 @@ void broadcast_committed(Service &s, const WalRecord &record) {
 
 void http_flush(Service &s) {
     Http &h = *s.http;
+    const int64_t now = now_ms();
+    if (now >= h.next_system_ms) {
+        h.next_system_ms = now + 1000;
+        ArenaScope scope(s.request);
+        if (Body *snapshot = body_in_arena(s)) {
+            system_json(s, *snapshot);
+            for (Conn &c : h.conns) {
+                if (c.state != ConnState::stream) continue;
+                if (c.out_sent > 0) {
+                    std::memmove(c.out.data, c.out.data + c.out_sent, c.out.len - c.out_sent);
+                    c.out.len -= c.out_sent;
+                    c.out_sent = 0;
+                }
+                cat(c.out, "event: system\ndata: ", snapshot->view(), "\n\n");
+                if (c.out.overflowed()) close_conn(h, c);
+            }
+        }
+    }
     for (Conn &c : h.conns) {
         if (c.state != ConnState::writing && c.state != ConnState::stream) continue;
         for (;;) {
