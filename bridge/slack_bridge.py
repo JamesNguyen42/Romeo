@@ -39,7 +39,8 @@ BOT_USER = web.auth_test()["user_id"]
 lock = threading.Lock()
 state = json.loads(STATE.read_text()) if STATE.exists() else {"threads": {}}
 state.setdefault("approvals", {})
-state.setdefault("cards", {})  # case id -> {"ts", "stage", "detail"}: one status card per case, edited in place
+state.setdefault("cards", {})
+state.setdefault("seen", [])  # message ts already handled: Slack can deliver one mention more than once  # case id -> {"ts", "stage", "detail"}: one status card per case, edited in place
 
 STAGES = ["Investigating", "Diagnosis", "Regression check", "Fix", "Pull request", "Verify"]  # thread ts -> case id waiting for a person's "yes"
 REPO_URL = f"https://github.com/{PR_REPO}"
@@ -198,6 +199,12 @@ def handle(client: SocketModeClient, req: SocketModeRequest):
         return
     direct = ev.get("channel_type") == "im"
     if ev.get("type") == "app_mention" or (ev.get("type") == "message" and direct):
+        key = f"{ev.get('channel')}:{ev.get('ts')}"
+        with lock:
+            if key in state["seen"]:
+                return
+            state["seen"] = (state["seen"] + [key])[-500:]
+            save()
         threading.Thread(target=on_message, args=(ev,), daemon=True).start()
 
 

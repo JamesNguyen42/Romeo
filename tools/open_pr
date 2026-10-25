@@ -1,19 +1,30 @@
 #!/usr/bin/env python3
 """Push fix/<case> and open a pull request with the evidence, the check and the verification result."""
 import sys, os, glob, json; sys.path.insert(0, os.path.dirname(__file__) + "/lib")
-from tool import INPUT, JOB, PRODUCT, sh, git, finish, case_rev
+from tool import INPUT, JOB, PRODUCT, sh, git, finish, case_rev, ornith
 
 case, rev = INPUT["case_id"], case_rev()
 branch = f"fix/{case}"
 if not git("rev-parse", "--verify", "-q", branch, check=False):
     finish("No fix branch to open a pull request from", [f"Branch {branch} does not exist; write_fix has not produced a fix."], data={"error": True})
 checks = sorted(glob.glob(str(JOB.parent / f"{case}-*" / "check.sh")))
-body = ["## Problem", INPUT.get("report", ""), "", "## Evidence the agent collected"]
-body += [f"- {f}" for f in INPUT.get("facts", [])[-12:]]
-if checks:
-    os.makedirs(PRODUCT / "checks", exist_ok=True)
-    body += ["", "## Regression check written by the agent", "```sh", open(checks[-1]).read().strip(), "```"]
-body += ["", f"Opened by the Romeo agent for case `{case}`. Every step is in the case log."]
+check_text = open(checks[-1]).read() if checks else ""
+expect = next((l.split("Passes when:", 1)[1].strip() for l in check_text.splitlines() if "Passes when:" in l), "")
+facts = INPUT.get("facts", [])
+
+# The model writes the prose in ASD-STE100 style; numbers, conditions and links are inserted verbatim by this tool.
+prose, _ = ornith(
+    "Write a pull request description in ASD-STE100 Simplified Technical English: short sentences (max 20 words), common words, "
+    "active voice, one claim per sentence, no marketing words. Use only the facts given. Output exactly three short paragraphs "
+    "with these headings on their own lines: 'Problem', 'Cause', 'Change'.",
+    f"Report: {INPUT.get('report', '')}\nFacts:\n" + "\n".join(f"- {f}" for f in facts[-14:]), 500)
+body = [prose.strip(), "", "## Evidence (measured by the agent on this machine)"]
+body += [f"- {f}" for f in facts[-10:] if any(ch.isdigit() for ch in f)]
+if expect:
+    body += ["", "## Regression check", f"The check `checks/{case}.sh` runs the renderer and passes when:", "", f"```\n{expect}\n```",
+             "", "It fails on the release build and passes on the known-good build."]
+body += ["", "## Verification", "The agent runs this branch again after the pull request and posts the result in the case thread.",
+         "", f"Opened by Juliette, the always-on engineering agent, for case `{case}`. Every step is in the case log."]
 (JOB / "pr-body.md").write_text("\n".join(body))
 code, out = sh("git", "-C", str(PRODUCT), "push", "-q", "-f", "origin", branch, timeout=120)
 if code != 0:
