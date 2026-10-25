@@ -1,0 +1,39 @@
+#!/usr/bin/env python3
+"""Chart the latest run of this case: frame times (with the 2x-median spike line) or resident memory. Writes chart.svg."""
+import sys, os, csv, glob; sys.path.insert(0, os.path.dirname(__file__) + "/lib")
+from pathlib import Path
+from tool import INPUT, JOB, finish
+
+case = INPUT["case_id"]
+runs = sorted((Path(p).parent for p in glob.glob(str(JOB.parent / f"{case}-*" / "summary.json"))), key=lambda p: p.stat().st_mtime)
+if not runs:
+    finish("No run to chart yet", ["Plot skipped: this case has no renderer run yet."], data={"error": True})
+run = runs[-1]
+kind = INPUT.get("args", {}).get("series") or ("memory" if "memory" in INPUT["case_state"].lower() else "frames")
+if kind == "memory":
+    pts = [(float(r["t_ms"]) / 1000, int(r["resident_bytes"]) / 2**20) for r in csv.DictReader(open(run / "memory.csv"))]
+    title, unit = "Resident memory", "MiB"
+else:
+    pts = [(int(r["frame"]), float(r["ms"])) for r in csv.DictReader(open(run / "frames.csv"))]
+    title, unit = "Frame time", "ms"
+W, H, x0, y0, pw, ph = 1000, 420, 70, 50, 900, 320
+xmax, ymax = max(p[0] for p in pts) or 1, max(p[1] for p in pts) * 1.1 or 1
+X, Y = (lambda x: x0 + pw * x / xmax), (lambda y: y0 + ph - ph * y / ymax)
+body = [f'<rect width="{W}" height="{H}" fill="#0b1016"/>', f'<text x="{x0}" y="30" font-size="16" font-weight="700" fill="#e8eef2" font-family="Helvetica">{title} · {run.name}</text>']
+for k in range(5):
+    v = ymax * k / 4
+    body.append(f'<line x1="{x0}" x2="{x0 + pw}" y1="{Y(v):.1f}" y2="{Y(v):.1f}" stroke="#1d2731"/><text x="{x0 - 8}" y="{Y(v) + 4:.1f}" font-size="11" fill="#7f8f99" text-anchor="end" font-family="Menlo">{v:.0f} {unit}</text>')
+facts = []
+if kind == "frames":
+    steady = sorted(p[1] for p in pts[40:]) or [0]
+    med = steady[len(steady) // 2]
+    body.append(f'<line x1="{x0}" x2="{x0 + pw}" y1="{Y(2 * med):.1f}" y2="{Y(2 * med):.1f}" stroke="#ffb347" stroke-dasharray="5 4"/>')
+    spikes = [p for p in pts[40:] if p[1] > 2 * med]
+    facts.append(f"Chart of {run.name}: median {med:.1f} ms; {len(spikes)} frames above the 2x-median line" + (f", the worst {max(s[1] for s in spikes):.0f} ms." if spikes else "."))
+else:
+    facts.append(f"Chart of {run.name}: memory from {pts[0][1]:.0f} MiB to {pts[-1][1]:.0f} MiB over {pts[-1][0]:.0f} s.")
+body.append('<polyline fill="none" stroke="#3fbdb4" stroke-width="1.8" points="' + " ".join(f"{X(x):.1f},{Y(y):.1f}" for x, y in pts) + '"/>')
+if kind == "frames":
+    body += [f'<circle cx="{X(x):.1f}" cy="{Y(y):.1f}" r="4" fill="#ff6b6b"/>' for x, y in spikes]
+(JOB / "chart.svg").write_text(f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" width="{W}" height="{H}">' + "".join(body) + "</svg>")
+finish(facts[0], facts, ["chart.svg"], {"series": kind, "run": run.name})

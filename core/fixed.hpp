@@ -5,6 +5,8 @@
 #pragma once
 
 #include <charconv>
+#include <cmath>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -129,6 +131,12 @@ struct Arena {
     size_t mark() const { return used; }
     void rewind(size_t m) { used = m; }
     void reset() { used = 0; }
+
+    // Bytes to budget so that alloc_bytes(bytes, align) fits from any cursor position: the request plus the
+    // worst-case alignment padding. Summing these over every planned allocation sizes an arena exactly enough.
+    static constexpr size_t budget_bytes(size_t bytes, size_t align = alignof(std::max_align_t)) { return bytes + align - 1; }
+    template <typename T>
+    static constexpr size_t budget(size_t count = 1) { return budget_bytes(sizeof(T) * count, alignof(T)); }
 };
 
 // Scoped bump scratch: everything allocated inside the scope is released when the scope ends.
@@ -199,6 +207,82 @@ inline uint32_t crc32(const void *data, size_t n, uint32_t crc = 0) {
     auto *p = static_cast<const uint8_t *>(data);
     for (size_t i = 0; i < n; ++i) crc = table.v[(crc ^ p[i]) & 255] ^ (crc >> 8);
     return ~crc;
+}
+
+
+// ---------------------------------------------------------------- text parts and number parsing
+
+// printf-compatible fixed-point number: decimal(v, 1) prints like "%.1f", signed_decimal(v, 0) like "%+.0f".
+struct Decimal {
+    double value;
+    int precision;
+    bool plus;
+};
+constexpr Decimal decimal(double v, int precision) { return {v, precision, false}; }
+constexpr Decimal signed_decimal(double v, int precision) { return {v, precision, true}; }
+
+// A JSON string value: printed with quotes and escaping.
+struct JsonString {
+    std::string_view text;
+};
+constexpr JsonString json_string(std::string_view s) { return {s}; }
+
+template <typename T>
+concept HasTextView = requires(const T &t) {
+    { t.view() } -> std::convertible_to<std::string_view>;
+};
+
+// Everything cat() can append to a FixedStringBuilder.
+template <typename T>
+concept TextPart = std::convertible_to<const T &, std::string_view> || HasTextView<T> || std::same_as<T, char> ||
+                   std::same_as<T, Decimal> || std::same_as<T, JsonString> ||
+                   (std::integral<T> && !std::same_as<T, bool> && !std::same_as<T, char>);
+
+template <uint32_t N, TextPart T>
+void append_part(FixedStringBuilder<N> &b, const T &part) {
+    if constexpr (std::same_as<T, Decimal>) {
+        if (part.plus && !std::signbit(part.value)) b.add('+');
+        b.num(part.value, part.precision);
+    } else if constexpr (std::same_as<T, JsonString>) {
+        b.str(part.text);
+    } else if constexpr (std::same_as<T, char>) {
+        b.add(part);
+    } else if constexpr (std::convertible_to<const T &, std::string_view>) {
+        b.add(std::string_view(part));
+    } else if constexpr (HasTextView<T>) {
+        b.add(part.view());
+    } else {
+        b.num(part);
+    }
+}
+
+// Appends every part in order. Overflow follows FixedStringBuilder: the first part that does not fit sets
+// overflowed() and the rest are ignored.
+template <uint32_t N, TextPart... Parts>
+FixedStringBuilder<N> &cat(FixedStringBuilder<N> &b, const Parts &...parts) {
+    (append_part(b, parts), ...);
+    return b;
+}
+
+// C-locale atoi semantics: leading whitespace, optional sign, longest digit prefix; 0 when there is no number.
+inline long long parse_leading_int(std::string_view s) {
+    size_t i = 0;
+    while (i < s.size() && (s[i] == ' ' || (s[i] >= '\t' && s[i] <= '\r'))) ++i;
+    if (i < s.size() && s[i] == '+') ++i;
+    long long v = 0;
+    std::from_chars(s.data() + i, s.data() + s.size(), v);
+    return v;
+}
+
+// C-locale atof semantics for decimal input: leading whitespace, optional sign, longest number prefix
+// (including inf and nan); 0 when there is no number.
+inline double parse_leading_double(std::string_view s) {
+    size_t i = 0;
+    while (i < s.size() && (s[i] == ' ' || (s[i] >= '\t' && s[i] <= '\r'))) ++i;
+    if (i < s.size() && s[i] == '+') ++i;
+    double v = 0;
+    std::from_chars(s.data() + i, s.data() + s.size(), v);
+    return v;
 }
 
 } // namespace romeo

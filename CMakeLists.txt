@@ -8,9 +8,10 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 add_compile_options(-Wall -Wextra -fno-exceptions)
 
-add_executable(romeo-render renderer/render.cpp)
-target_include_directories(romeo-render PRIVATE third_party/stb)
-target_compile_options(romeo-render PRIVATE -O3 -Wno-missing-field-initializers)
+add_executable(romeo-render renderer/main.cpp renderer/raster.cpp renderer/texture.cpp renderer/output.cpp)
+target_include_directories(romeo-render PRIVATE core)
+target_include_directories(romeo-render SYSTEM PRIVATE third_party/stb)
+target_compile_options(romeo-render PRIVATE -O3)
 find_package(Threads REQUIRED)
 target_link_libraries(romeo-render PRIVATE Threads::Threads)
 

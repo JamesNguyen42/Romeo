@@ -1,0 +1,7 @@
+[
+ {"name": "git_diff", "label": "change diff", "criteria": "Read the code change under investigation: commits and diff against the known-good revision", "requires": [], "once": true},
+ {"name": "plot", "label": "chart", "criteria": "Draw a chart of the latest run (frame times or memory) to show the problem", "requires": ["any_run"], "once": false},
+ {"name": "write_test", "label": "write a regression check", "criteria": "Write a regression check from the evidence and prove it fails on this revision and passes on the known-good one", "requires": ["facts>=3"], "once": true},
+ {"name": "write_fix", "label": "write a fix", "criteria": "Write a code fix on a branch, build it, and run the regression check against it", "requires": ["facts>=4"], "once": true},
+ {"name": "open_pr", "label": "open a pull request", "criteria": "Open a pull request with the fix, the regression check and the evidence", "requires": ["fix"], "once": true}
+]

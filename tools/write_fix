@@ -1,0 +1,55 @@
+#!/usr/bin/env python3
+"""Ask Ornith for a patch, apply it on fix/<case>, build it, and run the agent-written check against it."""
+import sys, os, glob, tempfile; sys.path.insert(0, os.path.dirname(__file__) + "/lib")
+from pathlib import Path
+from tool import INPUT, JOB, PRODUCT, sh, git, ornith, fenced, finish, build, case_rev
+
+case, rev, good = INPUT["case_id"], case_rev(), INPUT.get("rev_good", "main")
+checks = sorted(glob.glob(str(JOB.parent / f"{case}-*" / "check.sh")))
+check = checks[-1] if checks else None
+change = git("diff", "-U6", f"{good}...{rev}", check=False) or git("diff", "-U6", f"origin/{good}...origin/{rev}")
+files = [l[6:] for l in change.splitlines() if l.startswith("+++ b/")]
+context = "".join(f"\n===== {f} (at {rev}) =====\n" + git("show", f"{rev}:{f}", check=False)[:12000] for f in files[:2])
+
+branch = f"fix/{case}"
+feedback, attempts = "", []
+for attempt in (1, 2):
+    content, reasoning = ornith(
+        "You fix renderer regressions. Output one ```diff block only: a unified diff with a/ and b/ paths that applies with "
+        "`git apply` on top of the given revision. Keep the patch minimal and keep the code style.",
+        f"Case:\n{INPUT['case_state']}\n\nThe change that introduced the problem:\n```diff\n{change[:8000]}\n```\n"
+        f"Current source of the changed files:{context}\n{feedback}", 2400)
+    patch = fenced(content, "diff") + "\n"
+    (JOB / f"fix-{attempt}.patch").write_text(patch)
+    work = Path(tempfile.mkdtemp(prefix=f"fix-{case}-"))
+    git("worktree", "add", "-f", "-B", branch, str(work), rev)
+    code, out = sh("git", "-C", str(work), "apply", "--whitespace=nowarn", str(JOB / f"fix-{attempt}.patch"))
+    if code != 0:
+        attempts.append({"attempt": attempt, "applied": False, "error": out[-600:]})
+        feedback = f"\nYour previous patch did not apply: {out[-600:]}\nProduce a patch against exactly the source shown."
+        git("worktree", "remove", "--force", str(work), check=False)
+        continue
+    sh("git", "-C", str(work), "-c", "user.name=Romeo agent", "-c", "user.email=romeo-agent@users.noreply.github.com",
+       "commit", "-qam", f"Fix {case}: {INPUT.get('title', 'regression')}")
+    fix_sha = git("rev-parse", branch)
+    git("worktree", "remove", "--force", str(work), check=False)
+    binary, out = build(branch)
+    if not binary:
+        attempts.append({"attempt": attempt, "applied": True, "built": False, "error": out[-600:]})
+        feedback = f"\nYour previous patch applied but did not compile:\n{out[-1200:]}\nFix it."
+        continue
+    result = None
+    if check:
+        run_dir = JOB / f"check-on-fix-{attempt}"; run_dir.mkdir(exist_ok=True)
+        result, log = sh("sh", check, binary, str(run_dir), timeout=300)
+        (JOB / f"check-on-fix-{attempt}.log").write_text(log)
+    attempts.append({"attempt": attempt, "applied": True, "built": True, "check_exit": result, "reasoning": reasoning[:2000]})
+    if result in (0, None):
+        verdict = "passes the agent-written check" if result == 0 else "builds (no check was written for this case)"
+        finish(f"Patch on {branch} ({fix_sha[:8]}) {verdict}",
+               [f"Wrote a fix (attempt {attempt}) on branch {branch} at {fix_sha[:8]}; it applies, builds, and {verdict}."],
+               [f"fix-{attempt}.patch"] + ([f"check-on-fix-{attempt}.log"] if check else []),
+               {"fix_rev": branch, "fix_sha": fix_sha, "attempts": attempts})
+    feedback = f"\nYour previous patch built, but the regression check still fails:\n{(JOB / f'check-on-fix-{attempt}.log').read_text()[-1200:]}\nFix the cause."
+finish(f"No working fix in 2 attempts", [f"Two fix attempts failed: {[{k: a[k] for k in a if k != 'reasoning'} for a in attempts]}"],
+       [f"fix-{a['attempt']}.patch" for a in attempts], {"attempts": attempts})

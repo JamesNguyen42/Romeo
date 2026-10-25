@@ -1,0 +1,42 @@
+#!/usr/bin/env python3
+"""Ask Ornith to write a regression check from the evidence, then prove it: it must fail on the case revision and pass on the known-good revision."""
+import sys, os; sys.path.insert(0, os.path.dirname(__file__) + "/lib")
+from tool import INPUT, JOB, sh, ornith, fenced, finish, build, case_rev
+
+CLI = """The renderer binary is passed as $1 and an empty output directory as $2.
+Run it as: "$1" --setup <A..E> --frames <N> [--trace] --out "$2"
+It writes $2/summary.json with keys: p50_ms, p95_ms, p99_ms, max_ms, spike_frames, resident_end_bytes, cache_entries, tmp_bytes, total_ms
+(statistics skip the first 40 frames), plus $2/frames.csv (frame,ms), $2/memory.csv (t_ms,resident_bytes), $2/log.jsonl.
+A crash shows as a non-zero exit code of the renderer. jq and python3 are available."""
+setup = INPUT.get("setup", "A")
+bad_bin, out = build(case_rev())
+good_bin, out2 = build(INPUT.get("rev_good", "main"))
+if not bad_bin or not good_bin:
+    finish("Could not build both revisions for the check", ["Build failed: " + (out + out2)[-300:]], data={"error": True})
+
+feedback, attempts = "", []
+for attempt in (1, 2):
+    content, reasoning = ornith(
+        "You write POSIX sh regression checks for a renderer. Output one ```sh block only. The script must exit 1 when the "
+        "problem described by the evidence is present and exit 0 when it is absent. Use thresholds with margin; keep runtime under 60 s.",
+        f"{CLI}\nSetup under investigation: {setup}.\n\nCase:\n{INPUT['case_state']}\n{feedback}", 900)
+    script = fenced(content, "sh")
+    path = JOB / f"check-{attempt}.sh"
+    path.write_text(script + "\n"); path.chmod(0o755)
+    results = {}
+    for name, binary in (("case", bad_bin), ("good", good_bin)):
+        run_dir = JOB / f"run-{attempt}-{name}"; run_dir.mkdir(exist_ok=True)
+        code, log = sh("sh", str(path), binary, str(run_dir), timeout=300)
+        results[name] = code
+        (JOB / f"check-{attempt}-{name}.log").write_text(log)
+    attempts.append({"attempt": attempt, "exit_on_case_rev": results["case"], "exit_on_good_rev": results["good"], "reasoning": reasoning[:2000]})
+    if results["case"] != 0 and results["good"] == 0:
+        (JOB / "check.sh").write_text(script + "\n"); (JOB / "check.sh").chmod(0o755)
+        finish(f"Agent-written check fails on {case_rev()} and passes on {INPUT.get('rev_good', 'main')} (attempt {attempt})",
+               [f"Wrote a regression check (attempt {attempt}). It exits {results['case']} on the case revision and 0 on the known-good revision, so it detects this problem."],
+               ["check.sh", f"check-{attempt}-case.log", f"check-{attempt}-good.log"], {"attempts": attempts, "check": str(JOB / "check.sh")})
+    feedback = (f"\nYour previous script exited {results['case']} on the problem build (must be non-zero) and {results['good']} on the good build "
+                f"(must be 0). Its output on the problem build was:\n{(JOB / f'check-{attempt}-case.log').read_text()[-1500:]}\nFix it.")
+finish("Could not write a check that separates the two revisions in 2 attempts",
+       [f"Two check attempts did not separate the revisions (exit codes: {[(a['exit_on_case_rev'], a['exit_on_good_rev']) for a in attempts]})."],
+       [f"check-{a['attempt']}.sh" for a in attempts], {"attempts": attempts})

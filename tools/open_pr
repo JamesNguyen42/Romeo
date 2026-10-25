@@ -1,0 +1,28 @@
+#!/usr/bin/env python3
+"""Push fix/<case> and open a pull request with the evidence, the check and the verification result."""
+import sys, os, glob, json; sys.path.insert(0, os.path.dirname(__file__) + "/lib")
+from tool import INPUT, JOB, PRODUCT, sh, git, finish, case_rev
+
+case, rev = INPUT["case_id"], case_rev()
+branch = f"fix/{case}"
+if not git("rev-parse", "--verify", "-q", branch, check=False):
+    finish("No fix branch to open a pull request from", [f"Branch {branch} does not exist; write_fix has not produced a fix."], data={"error": True})
+checks = sorted(glob.glob(str(JOB.parent / f"{case}-*" / "check.sh")))
+body = ["## Problem", INPUT.get("report", ""), "", "## Evidence the agent collected"]
+body += [f"- {f}" for f in INPUT.get("facts", [])[-12:]]
+if checks:
+    os.makedirs(PRODUCT / "checks", exist_ok=True)
+    body += ["", "## Regression check written by the agent", "```sh", open(checks[-1]).read().strip(), "```"]
+body += ["", f"Opened by the Romeo agent for case `{case}`. Every step is in the case log."]
+(JOB / "pr-body.md").write_text("\n".join(body))
+code, out = sh("git", "-C", str(PRODUCT), "push", "-q", "-f", "origin", branch, timeout=120)
+if code != 0:
+    finish("Push failed", [f"git push of {branch} failed: {out[-300:]}"], ["pr-body.md"], {"error": True})
+code, out = sh("gh", "pr", "create", "--repo", os.environ.get("PRODUCT_REPO", ""), "--base", rev, "--head", branch,
+               "--title", f"Fix {case}: {INPUT.get('title', 'regression')}", "--body-file", str(JOB / "pr-body.md"), cwd=str(PRODUCT), timeout=120)
+url = out.strip().splitlines()[-1] if code == 0 else ""
+if code != 0 and "already exists" in out:
+    code, url = 0, out.strip().splitlines()[-1]
+finish(f"Pull request: {url}" if code == 0 else "Pull request failed",
+       [f"Opened pull request {url} from {branch} into {rev}." if code == 0 else f"gh pr create failed: {out[-300:]}"],
+       ["pr-body.md"], {"pr_url": url, "error": code != 0})
