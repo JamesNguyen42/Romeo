@@ -52,7 +52,8 @@ def triage(report, rig):
     with urllib.request.urlopen(req, timeout=60) as r:
         a = json.loads(r.read())["answers"]
     d, q = a["duplicate_of"], a["queue"]
-    same = d["choice"] if d["choice"] != "new_problem" and d["probabilities"].get(d["choice"], 0) >= 0.5 else None
+    # Several cases on one rig split the probability, so a match only has to beat "new_problem", not reach 0.5.
+    same = d["choice"] if d["choice"] != "new_problem" and d["probabilities"].get(d["choice"], 0) > d["probabilities"].get("new_problem", 0) else None
     return same, q["choice"] == "front", {"duplicate_of": d["choice"], "p_duplicate": round(d["probabilities"].get(d["choice"], 0), 2),
                                           "queue": q["choice"], "p_queue": round(q["probabilities"].get(q["choice"], 0), 2)}
 
