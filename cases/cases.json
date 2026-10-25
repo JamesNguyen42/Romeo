@@ -1,22 +1,111 @@
 [
-  {"id": "case-01", "title": "Memory grows during a long render", "setup": "D", "bugs": "cache_leak",
-   "report": "On the 8-view setup, the renderer's memory keeps climbing during long renders until the machine runs out of memory. Short renders look fine."},
-  {"id": "case-02", "title": "Frame spikes every few seconds", "setup": "B", "bugs": "loader_lock",
-   "report": "Playback stutters on the 4-view setup. Average frame time looks normal, but there is a visible hitch every few seconds."},
-  {"id": "case-03", "title": "Frame time up after a renderer change", "setup": "C", "bugs": "tile_size",
-   "report": "After the latest renderer change, 4K renders on the single-view setup are slower. Nothing else changed in the scene."},
-  {"id": "case-04", "title": "Multi-view renders slower after a change", "setup": "E", "bugs": "view_setup",
-   "report": "Since the latest change, the 12-view setup renders much slower than before. Single-view renders seem unaffected."},
-  {"id": "case-05", "title": "Renderer crashes on the 12-view setup", "setup": "E", "bugs": "view_overflow",
-   "report": "Jobs on the 12-view setup fail right at start-up and produce no frames. Smaller setups still work."},
-  {"id": "case-06", "title": "Disk fills up during renders", "setup": "D", "bugs": "disk_leak",
-   "report": "Render machines running the 8-view setup run out of disk space after a few long jobs and the jobs get killed."},
-  {"id": "case-07", "title": "4K image looks blurry after an upgrade", "setup": "C", "bugs": "mip_bias",
-   "report": "After the engine upgrade, 4K renders look soft and blurry, especially textures in the distance."},
-  {"id": "case-08", "title": "Memory alert on the single-view setup", "setup": "A", "bugs": "",
-   "report": "A memory alert fired on a machine running single-view renders. Nobody knows whether the renderer caused it."},
-  {"id": "case-09", "title": "Stutter report without a capture", "setup": "A", "bugs": "",
-   "report": "A user says the single-view render stutters on their machine. No trace or logs were attached."},
-  {"id": "case-10", "title": "12-view jobs fail at start-up (second report)", "setup": "E", "bugs": "view_overflow",
-   "report": "Another team reports that every 12-view job dies immediately after launch with no output frames."}
+ {
+  "id": "case-01",
+  "title": "Memory grows during a long render",
+  "setup": "D",
+  "bugs": "cache_leak",
+  "report": "On the 8-view setup, the renderer's memory keeps climbing during long renders until the machine runs out of memory. Short renders look fine."
+ },
+ {
+  "id": "case-02",
+  "title": "Frame spikes every few seconds",
+  "setup": "B",
+  "bugs": "loader_lock",
+  "report": "Playback stutters on the 4-view setup. Average frame time looks normal, but there is a visible hitch every few seconds."
+ },
+ {
+  "id": "case-03",
+  "title": "Frame time up after a renderer change",
+  "setup": "C",
+  "bugs": "tile_size",
+  "report": "After the latest renderer change, 4K renders on the single-view setup are slower. Nothing else changed in the scene."
+ },
+ {
+  "id": "case-04",
+  "title": "Multi-view renders slower after a change",
+  "setup": "E",
+  "bugs": "view_setup",
+  "report": "Since the latest change, the 12-view setup renders much slower than before. Single-view renders seem unaffected."
+ },
+ {
+  "id": "case-05",
+  "title": "Renderer crashes on the 12-view setup",
+  "setup": "E",
+  "bugs": "view_overflow",
+  "report": "Jobs on the 12-view setup fail right at start-up and produce no frames. Smaller setups still work."
+ },
+ {
+  "id": "case-06",
+  "title": "Disk fills up during renders",
+  "setup": "D",
+  "bugs": "disk_leak",
+  "report": "Render machines running the 8-view setup run out of disk space after a few long jobs and the jobs get killed."
+ },
+ {
+  "id": "case-07",
+  "title": "4K image looks blurry after an upgrade",
+  "setup": "C",
+  "bugs": "mip_bias",
+  "report": "After the engine upgrade, 4K renders look soft and blurry, especially textures in the distance."
+ },
+ {
+  "id": "case-08",
+  "title": "Memory alert on the single-view setup",
+  "setup": "A",
+  "bugs": "",
+  "report": "A memory alert fired on a machine running single-view renders. Nobody knows whether the renderer caused it."
+ },
+ {
+  "id": "case-09",
+  "title": "Stutter report without a capture",
+  "setup": "A",
+  "bugs": "",
+  "report": "A user says the single-view render stutters on their machine. No trace or logs were attached."
+ },
+ {
+  "id": "case-10",
+  "title": "12-view jobs fail at start-up (second report)",
+  "setup": "E",
+  "bugs": "view_overflow",
+  "report": "Another team reports that every 12-view job dies immediately after launch with no output frames."
+ },
+ {
+  "id": "case-11",
+  "title": "Stutter and rising memory on the 8-view setup",
+  "setup": "D",
+  "bugs": "loader_lock,cache_leak",
+  "report": "Long renders on the 8-view setup hitch every few seconds, and the machine's memory keeps climbing. Two teams filed this; nobody knows whether it is one problem or two.",
+  "difficulty": "two causes at once"
+ },
+ {
+  "id": "case-12",
+  "title": "Hitching on the 4-view setup, no traces or logs",
+  "setup": "B",
+  "bugs": "loader_lock",
+  "withhold": [
+   "capture_trace",
+   "fetch_logs"
+  ],
+  "report": "Playback hitches every few seconds on the 4-view setup. Tracing is disabled on these machines and their logs were not kept.",
+  "difficulty": "partial data: no trace, no logs"
+ },
+ {
+  "id": "case-13",
+  "title": "12-view jobs die, logs lost",
+  "setup": "E",
+  "bugs": "view_overflow",
+  "withhold": [
+   "fetch_logs"
+  ],
+  "report": "12-view jobs die immediately. The log store for these machines was wiped, so no logs are available.",
+  "difficulty": "partial data: crash without logs"
+ },
+ {
+  "id": "case-14",
+  "title": "Soft image and slower frames after one upgrade",
+  "setup": "C",
+  "bugs": "mip_bias,tile_size",
+  "report": "After one upgrade, 4K renders look blurry and also take longer per frame. The upgrade changed many things at once.",
+  "difficulty": "two unrelated regressions in one upgrade"
+ }
 ]
