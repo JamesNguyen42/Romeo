@@ -254,8 +254,16 @@ def on_event(e):
             if a.endswith("check.sh") or a.endswith(".patch"):
                 path = DATA / "jobs" / a
                 if path.is_file():
-                    lang = "sh" if a.endswith(".sh") else "diff"
-                    post(cid, f"`{a.split('/')[-1]}`\n```{path.read_text()[:2500]}```")
+                    name = a.split("/")[-1]
+                    if name == "change.patch":
+                        label = ":mag: *The change that introduced the problem* (release vs. main; `+` lines are what the release added)"
+                    elif name.startswith("fix-"):
+                        label = f":hammer_and_wrench: *Fix attempt {name[4:-6]}, written by Juliette*"
+                    elif name == "check.sh":
+                        label = ":test_tube: *Regression check written by Juliette* (runs without a model)"
+                    else:
+                        label = f"`{name}`"
+                    post(cid, f"{label}\n```{path.read_text()[:2500]}```")
             elif a.endswith(("chart.svg", "diff.png")) or (a.endswith("image.png") and tool == ""):
                 pass
     elif typ == "thought" and d.get("text"):
