@@ -1,0 +1,31 @@
+{
+  "id": "romeo-messages",
+  "name": "Romeo Messages",
+  "description": "Lets the agent pull Slack messages, with sender and channel, for Romeo cases",
+  "categories": ["developer-tools"],
+  "contracts": {
+    "tools": ["romeo_get_messages"]
+  },
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "pythonPath": {
+        "type": "string",
+        "description": "Python with the cases requirements installed. Default: cases/.venv, then python3."
+      },
+      "scriptPath": {
+        "type": "string",
+        "description": "Path to messages.py. Default: cases/messages/messages.py next to this plugin."
+      },
+      "timeoutMs": {
+        "type": "integer",
+        "minimum": 1000,
+        "description": "Longest one extraction may run. Default: 120000."
+      }
+    }
+  }
+}
