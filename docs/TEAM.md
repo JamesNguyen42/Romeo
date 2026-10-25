@@ -101,10 +101,12 @@ read these events; they never need any other state.
 | `type` | `data` fields | Good visual |
 | --- | --- | --- |
 | `case_opened` | `title`, `setup`, `report` | New card on the board |
-| `decision` | `candidates`: `[{"action": "...", "p": 0.71}, ...]`, `chosen` | Probability bars, chosen bar highlighted |
+| `decision` | `candidates`: `[{"action": "...", "label": "...", "p": 0.71}, ...]`, `chosen`, `model`, `inference_ms` | Probability bars, chosen bar highlighted |
 | `action_requested` | `action_id`, `kind`, `args` | "Waiting for …" chip with a timer |
 | `action_result` | `action_id`, `source` (`run` or `fixture`), `summary`, `artifacts` | Chart, trace or image from `artifacts` |
 | `fact` | `text`, `evidence`: artifact names | Line added to the evidence list |
+| `thought` | `text`, `reasoning` (the model's thinking, may be empty), `model` | "What it is thinking" bubble |
+| `conclusion` | `diagnosis`, `fix`, `model` | Headline card: the cause and the proposed change |
 | `restarted` | `pending`: action IDs still awaited | "Service restarted, still waiting" banner |
 | `stopped` | `reason`, `missing`: what evidence would be needed | Grey card with the missing list |
 | `done` | `summary`, `fix`: proposed change, `checks`: what passed | Green card, before/after visuals |
