@@ -38,6 +38,8 @@ web = WebClient(token=os.environ["SLACK_BOT_TOKEN"])
 BOT_USER = web.auth_test()["user_id"]
 lock = threading.Lock()
 state = json.loads(STATE.read_text()) if STATE.exists() else {"threads": {}}
+state.setdefault("approvals", {})  # thread ts -> case id waiting for a person's "yes"
+REPO_URL = f"https://github.com/{PR_REPO}"
 chat_cases = set()  # cases opened from Slack: their thread is the reporter's message, saved by on_message
 
 
@@ -92,6 +94,20 @@ def on_message(event):
     if not text:
         return
     known = next((cid for cid, t in state["threads"].items() if t["ts"] == ts), None)
+    pending = state["approvals"].get(ts)
+    if pending and re.match(r"^(yes|y|ok|approve|approved|go|do it)\b", text, re.I):
+        api("POST", f"/api/cases/{pending}/priority", {"by": user})
+        with lock:
+            state["approvals"].pop(ts, None)
+            save()
+        web.chat_postMessage(channel=channel, thread_ts=ts, text=f":white_check_mark: Approved by <@{user}>: *{pending}* is now first in the queue. Recorded in the case log.")
+        return
+    if pending and re.match(r"^(no|n|cancel|stop)\b", text, re.I):
+        with lock:
+            state["approvals"].pop(ts, None)
+            save()
+        web.chat_postMessage(channel=channel, thread_ts=ts, text=f"OK, *{pending}* keeps its place in the queue.")
+        return
     try:
         route = api("POST", "/api/route", {"text": text, "channel": channel, "user": user, **({"case_id": known} if known else {})}, timeout=90)
     except Exception as e:
@@ -114,6 +130,20 @@ def on_message(event):
         cid = route.get("case_id") or known
         api("POST", f"/api/cases/{cid}/messages", {"text": text, "channel": channel, "user": user})
         web.chat_postMessage(channel=channel, thread_ts=ts, text=f":memo: Added to *{cid}* (Clef: question about this case, p={conf:.2f}). The agent will read it on its next step.")
+    elif action == "propose_priority":
+        cid = route.get("case_id") or known
+        if not cid:
+            web.chat_postMessage(channel=channel, thread_ts=ts, text="Which case should go first? Mention its id, for example case-101.")
+            return
+        queue = api("GET", "/api/queue")
+        ahead = [f"{q['case']} ({q['label']})" for q in queue if q["case"] != cid]
+        with lock:
+            state["approvals"][ts] = cid
+            save()
+        web.chat_postMessage(channel=channel, thread_ts=ts, text=(
+            f":rotating_light: Can I put *{cid}* at the top of the queue? (Clef: priority request, p={conf:.2f})\n"
+            + (f"It would go ahead of: {', '.join(ahead[:6])}.\n" if ahead else "Nothing else is waiting, so it would start next anyway.\n")
+            + "The job running now finishes first; nothing is stopped mid-run.\nReply `@juliet1 yes` to approve or `@juliet1 no` to keep the order."))
     elif action == "summarize_status":
         cases = api("GET", "/api/cases")
         lines = [f"• *{c['id']}* {c['title']} — {c['status']}" + (f" ({c['waiting_for']})" if c.get("waiting_for") else "") for c in cases]
@@ -175,11 +205,37 @@ def on_event(e):
         post(cid, f":bulb: *Conclusion*: {d.get('diagnosis', '')}\n*Proposed fix*: {d.get('fix', '')}", broadcast=True)
     elif typ == "done":
         checks = "\n".join(f"• {c}" for c in d.get("checks", []))
-        post(cid, f":white_check_mark: *{cid} done* — {d.get('summary', '')}\n{checks}\n_Verified with: {d.get('verified_with', '')}_", broadcast=True)
+        post(cid, f":white_check_mark: *{cid} done* — {d.get('summary', '')}\n{checks}\n_Verified with: {d.get('verified_with', '')}_{case_links(cid)}", broadcast=True)
     elif typ == "stopped":
         post(cid, f":octagonal_sign: *{cid} stopped* — {d.get('reason', '')}\nMissing: {d.get('missing', '')}", broadcast=True)
+    elif typ == "priority":
+        post(cid, f":rotating_light: Priority raised for *{cid}* (approved by <@{d.get('by', '')}>). Its jobs start first.")
     elif typ == "restarted":
         post(cid, ":arrows_counterclockwise: The case service restarted; this case resumed from its log. No step runs twice.")
+
+
+def case_links(cid):
+    """PR, fix branch, the commit under investigation and the code lines the agent cited, as GitHub links."""
+    try:
+        events = api("GET", f"/api/cases/{cid}")["events"]
+    except Exception:
+        return ""
+    links, seen = [], set()
+    for e in events:
+        d = e.get("data", {})
+        data = d.get("data") or {}
+        if data.get("pr_url"):
+            links.append(f":rocket: Pull request: {data['pr_url']}")
+        if data.get("fix_rev"):
+            links.append(f":hammer_and_wrench: Fix branch: {REPO_URL}/tree/{data['fix_rev']}")
+        for commit in data.get("commits", [])[:1]:
+            links.append(f":mag: Change under investigation: {REPO_URL}/commit/{commit.split()[0]} ({' '.join(commit.split()[1:])})")
+        if e.get("type") == "fact":
+            for f, line in re.findall(r"\b([a-z_]+\.(?:cpp|hpp)):(\d+)", d.get("text", "")):
+                if (f, line) not in seen and len(seen) < 6:
+                    seen.add((f, line))
+                    links.append(f":page_facing_up: Code cited: {REPO_URL}/blob/main/renderer/{f}#L{line}")
+    return ("\n" + "\n".join(dict.fromkeys(links))) if links else ""
 
 
 def follow_stream():

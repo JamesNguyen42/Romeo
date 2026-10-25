@@ -191,6 +191,17 @@ void commit_iteration(Service &s) {
     // stay queued in order; their action_requested records are already durable.
     SpawnQueue &q = *s.spawns;
     bool busy = job_process_running(s);
+    // A case a person marked as priority goes first: move its first queued job to the front.
+    for (uint32_t i = 1; i < q.items.count; ++i) {
+        const SpawnRequest &r = q.items[i];
+        if (r.case_index < s.store->cases.count && s.store->cases[r.case_index].priority &&
+            !(q.items[0].case_index < s.store->cases.count && s.store->cases[q.items[0].case_index].priority)) {
+            const SpawnRequest moved = r;
+            for (uint32_t k = i; k > 0; --k) q.items[k] = q.items[k - 1];
+            q.items[0] = moved;
+            break;
+        }
+    }
     uint32_t kept = 0;
     for (uint32_t i = 0; i < q.items.count; ++i) {
         const SpawnRequest r = q.items[i];

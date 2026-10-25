@@ -229,6 +229,7 @@ struct Case {
     uint32_t generation = 0; // changes when the slot is reused, so late model completions are dropped
     bool busy = false;       // a decide, conclude or stop call for this case is in flight
     bool concluded = false;
+    bool priority = false;   // approved by a person in chat: this case's queued jobs start first
     bool frozen = false;     // an event was refused for capacity; the case no longer advances
 
     bool is_done(std::string_view kind) const;

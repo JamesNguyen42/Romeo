@@ -423,12 +423,13 @@ static constexpr std::string_view kIntents[][2] = {
     {"new_report", "Describes a new problem"},
     {"case_question", "Asks about an existing case"},
     {"status", "Asks what is going on overall"},
+    {"priority", "Asks to make a case more urgent or to move it to the front of the queue"},
     {"other", "Anything else"},
 };
 
 static void route_respond(Conn &conn) {
     const RouteState &r = conn.route;
-    std::string_view action = r.intent == "new_report" ? "open_case" : r.intent == "case_question" ? "append_message" : r.intent == "status" ? "summarize_status" : "none";
+    std::string_view action = r.intent == "new_report" ? "open_case" : r.intent == "case_question" ? "append_message" : r.intent == "status" ? "summarize_status" : r.intent == "priority" ? "propose_priority" : "none";
     FixedStringBuilder<1024> b;
     cat(b, "{\"intent\":", json_string(r.intent.view()), ",\"p\":", r.probabilities);
     if (!r.case_id.empty()) cat(b, ",\"case_id\":", json_string(r.case_id.view()));
@@ -497,7 +498,7 @@ bool on_route_call_done(Service &s, ModelCall &call, long http, CURLcode rc) {
         r.probabilities.add('}');
         bool any_open = false;
         for (const Case &c : s.store->cases) any_open |= is_open(c);
-        if (r.intent == "case_question" && r.case_id.empty() && any_open) {
+        if ((r.intent == "case_question" || r.intent == "priority") && r.case_id.empty() && any_open) {
             if (post_route_question(s, call, conn, true)) return true;
             respond_json(conn, 503, "{\"error\":\"routing request too large\"}");
             return false;
@@ -706,6 +707,31 @@ static void handle(Service &s, Conn &conn, const Request &r) {
             return respond_json(conn, 413, "{\"error\":\"routing request too large\"}");
         }
         return;
+    }
+    // Approved in chat: the case's queued jobs start before other cases' jobs. Recorded in the WAL like every change.
+    if (post && path.substr(0, 11) == "/api/cases/" && path.size() > 20 && path.substr(path.size() - 9) == "/priority") {
+        Case *c = find_case(store, path.substr(11, path.size() - 20));
+        if (!c) return respond_json(conn, 404, "{\"error\":\"no such case\"}");
+        yyjson_val *b = r.body.empty() ? nullptr : yyjson_doc_get_root(parse_json(s.request, r.body));
+        std::string_view by = json_str(b, "by");
+        emit(s, *c, "priority", [&](EventLine &e) { cat(e, "{\"by\":", json_string(by.substr(0, 63)), "}"); });
+        return respond_json(conn, 200, "{\"priority\":true}");
+    }
+    // Jobs waiting for the single job slot, in start order.
+    if (!post && path == "/api/queue") {
+        Body *out = body_in_arena(s);
+        if (!out) return respond_too_large(conn);
+        out->add('[');
+        for (uint32_t i = 0; i < s.spawns->items.count; ++i) {
+            const SpawnRequest &r = s.spawns->items[i];
+            if (r.case_index >= store.cases.count) continue;
+            const Case &c = store.cases[r.case_index];
+            const Pending *p = c.find_pending(r.action_id.view());
+            cat(*out, i ? "," : "", "{\"case\":", json_string(c.def.id.view()), ",\"action_id\":", json_string(r.action_id.view()), ",\"label\":",
+                json_string(p ? p->label.view() : r.kind.view()), ",\"priority\":", c.priority ? "true" : "false", "}");
+        }
+        out->add(']');
+        return respond_json(conn, 200, out->view());
     }
     if (post && path.substr(0, 11) == "/api/cases/" && path.size() > 20 && path.substr(path.size() - 9) == "/messages") {
         Case *c = find_case(store, path.substr(11, path.size() - 20));

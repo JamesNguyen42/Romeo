@@ -318,6 +318,8 @@ void apply(Case &c, yyjson_val *ev) {
                 if (auto *slot = c.def.withhold.push()) slot->assign(yyjson_get_str(value) ? yyjson_get_str(value) : "");
             }
         }
+    } else if (type == "priority") {
+        c.priority = true;
     } else if (type == "action_requested") {
         std::string_view id = str_of(d, "action_id");
         Pending *p = const_cast<Pending *>(c.find_pending(id));
