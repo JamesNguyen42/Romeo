@@ -3,7 +3,7 @@
 // Files are written with open()/write()/close(). Text is formatted with FixedStringBuilder into fixed storage;
 // FileWriter batches it into a caller-provided buffer. Formats are fixed because the case service parses them:
 // log.jsonl, frames.csv, memory.csv, trace.json (Chrome trace), summary.json, image.png, image.rgba and the
-// tmp/ thumbnails; with a depth sensor depth.png and depth.f32, with a lidar points.ply.
+// tmp/ thumbnails; with a depth sensor depth.png and depth.f32, with a lidar points.ply, with moving agents motion.png.
 #pragma once
 
 #include <chrono>
@@ -77,7 +77,7 @@ Log open_log(const char *path);
 
 // ---------------------------------------------------------------- trace.json
 
-enum class TraceName : uint8_t { frame, wait_asset_lock, raster_tiles, asset_read_parse, lidar_sweep, raster_depth };
+enum class TraceName : uint8_t { frame, wait_asset_lock, raster_tiles, asset_read_parse, lidar_sweep, raster_depth, motion_blur };
 
 struct TraceEvent {
     double start_ms, dur_ms;
@@ -143,6 +143,10 @@ struct RunSummary {
     double lidar_sweep_ms;  // median over every sweep; written as null without a lidar
     uint32_t view_seed;
     int warmup_frames, measured_frames;
+    // Motion setups only; the five members below are appended to summary.json only when `motion` is set.
+    bool motion, ego_moving;
+    int agents;
+    double mv_error_px, agent_edge_energy, static_edge_energy;
 };
 
 bool write_summary(const char *path, const RunSummary &s);

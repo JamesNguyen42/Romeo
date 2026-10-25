@@ -1,5 +1,12 @@
 [
  {
+  "name": "recall_similar",
+  "label": "recall earlier findings",
+  "criteria": "Search memory of earlier cases as a graph: findings, fixes, pull requests and regression checks that share files, functions, commits, symptoms or rigs with this case",
+  "requires": [],
+  "once": true
+ },
+ {
   "name": "visualize",
   "label": "draw evidence charts",
   "criteria": "Draw the evidence: frame spikes, the thread timeline at the worst frame, memory over time and a before/after render, from this case's runs",

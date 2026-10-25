@@ -20,7 +20,29 @@ constexpr int kMaxViews = 16;
 
 // Ground quad plus an 11 x 11 grid of boxes with 5 faces each (no bottom), two triangles per quad.
 constexpr int kSceneTriangles = 2 + 11 * 11 * 5 * 2; // 1,212
-static_assert(kSceneTriangles <= 65535, "tile bins store uint16_t triangle indices");
+
+// Motion setups append kAgents moving boxes (5 faces each, no bottom) after the static scene, so the static
+// triangles keep their indices and order. Agent a owns scene triangles [kSceneTriangles + a * kAgentTris, + kAgentTris).
+// The rig cameras stand on the ground, and a triangle with a vertex behind the near plane is dropped, so motion
+// setups replace the single ground quad (triangles 0 and 1) with kGroundCells^2 tiles of one texture repeat each,
+// appended after the agents.
+constexpr int kAgents = 24;
+// An agent is a person-shaped surface of revolution (feet, hips, chest, shoulders, neck, head): kFigureBands
+// profile bands of kFigureSegments quads each.
+constexpr int kFigureSegments = 10, kFigureBands = 11;
+constexpr int kAgentTris = kFigureSegments * kFigureBands * 2;
+constexpr int kGroundCells = 24; // the ground quad's 24 texture repeats over 80 m
+constexpr int kMotionSceneTriangles = kSceneTriangles + kAgents * kAgentTris + kGroundCells * kGroundCells * 2;
+static_assert(kMotionSceneTriangles < 65535, "tile bins and the pixel triangle ids store uint16_t indices");
+
+// Agent that owns scene triangle `tri`, or -1 for static geometry.
+constexpr int agent_of(int tri) {
+    return tri >= kSceneTriangles && tri < kSceneTriangles + kAgents * kAgentTris ? (tri - kSceneTriangles) / kAgentTris : -1;
+}
+
+// Fixed simulation step of moving agents and the ego rig: frame f is at time f * kFrameDt seconds.
+constexpr float kFrameDt = 1.0f / 30.0f;
+constexpr float kEgoSpeed = 8.0f; // m/s along +z when the ego moves
 
 // Near and far planes of every view. The depth test stores window depth in [0, 1]; 1 is the far plane and also the
 // value of a pixel no triangle covers.
@@ -67,12 +89,42 @@ struct RasterSetup {
     M4 proj = {};
 };
 
+// Previous-frame clip position of one ScreenTri's vertices, each multiplied by that vertex's current inv_w so
+// screen-space barycentrics interpolate it perspective-correctly. `src` is the scene triangle index.
+struct PrevClip {
+    float x_w[3], y_w[3], w_w[3];
+    uint16_t src;
+};
+
 struct ViewState {
     uint32_t *color = nullptr;                  // width * height RGBA8, sRGB-encoded; camera views only
     float *depth = nullptr;                     // width * height window depth of the last pass, or nullptr: view 0
                                                 // when the setup has a depth sensor, and every lidar face
-    romeo::ArenaArray<ScreenTri> tris;          // capacity kSceneTriangles, rebuilt per frame by the main thread
-    romeo::ArenaArray<uint16_t> *bins = nullptr; // tile_count bins of triangle indices, capacity kSceneTriangles each
+    romeo::ArenaArray<ScreenTri> tris;          // capacity = scene triangles, rebuilt per frame by the main thread
+    romeo::ArenaArray<uint16_t> *bins = nullptr; // tile_count bins of triangle indices, capacity = scene triangles
+    // Motion setups, view 0 only (nullptr otherwise):
+    PrevClip *prev = nullptr;                   // parallel to tris
+    float *motion = nullptr;                    // width * height float2, pixels per frame, current - previous
+    uint16_t *tri_id = nullptr;                 // width * height index into tris of the visible triangle, or kNoTri
+};
+
+constexpr uint16_t kNoTri = 0xffff;
+
+// One agent's straight back-and-forth path, from the seeded table built by init_raster().
+struct AgentPath {
+    V3 start, dir; // dir is a unit axis
+    float length, speed, phase; // metres, m/s, metres along the 2 * length cycle at t = 0
+};
+
+// Moving agents, ego rig and blur output. From the arena only for motion setups; written by the main thread
+// between frames, read by the workers while they rasterize and blur.
+struct MotionState {
+    AgentPath paths[kAgents];
+    V3 agent_pos[kAgents];      // this frame
+    V3 agent_prev_pos[kAgents]; // the previous-frame model transform (a translation) used for motion vectors
+    bool ego_moving = false;
+    int frame = 0;
+    uint32_t *blurred = nullptr; // width * height RGBA8: view 0 after motion blur
 };
 
 // The lidar faces' fixed geometry and the sweep's direction tables, built once by init_raster().
@@ -89,6 +141,8 @@ struct RasterState {
     romeo::FixedArray<ViewState, kMaxViews> views; // [0, cameras) camera views, then the lidar faces if any
     int cameras = 0;
     LidarRig *rig = nullptr;                      // from the arena, only when the setup has a lidar
+    MotionState *motion = nullptr;                // from the arena, only when the setup has moving agents
+    int triangles = kSceneTriangles;              // scene triangle count
 };
 
 // One lidar return in the lidar frame: origin at the mount, axes parallel to the world axes (y up), metres.
@@ -104,10 +158,29 @@ struct WorkerTile {
 };
 
 // Main-arena bytes init_raster() takes. `depth` adds view 0's depth buffer; `lidar` adds kLidarViews lidar faces
-// after the camera views.
-size_t raster_arena_bytes(int width, int height, int tile, int cameras, bool depth, bool lidar);
+// after the camera views; `motion` adds the agents, view 0's motion buffers and the blurred image.
+size_t raster_arena_bytes(int width, int height, int tile, int cameras, bool depth, bool lidar, bool motion);
 bool init_raster(RasterState &rs, romeo::Arena &arena, int width, int height, int tile, float lod_bias, int cameras, bool depth,
-                 bool lidar);
+                 bool lidar, bool motion, bool ego_moving);
+
+// Main thread, motion setups, before binning frame `frame`: moves the agents. The stored previous-frame agent
+// transforms take this frame's old values; `stale_agent_prev` (the bug) stops that update after frame 0.
+void step_motion(RasterState &rs, int frame, bool stale_agent_prev);
+
+// Worker thread, motion setups: blurs every tile of view 0 that worker `worker` of `workers` owns into
+// MotionState::blurred, 8 samples along each pixel's motion vector.
+void blur_tiles(RasterState &rs, int worker, int workers);
+
+// Main thread, motion setups, after the last frame's blur.
+struct MotionMetrics {
+    double mv_error_px;        // mean |rendered - analytic| motion vector over agent pixels
+    double agent_edge_energy;  // mean |dL/dx| + |dL/dy| of the blurred image over agent pixels
+    double static_edge_energy; // the same over the other covered pixels
+};
+MotionMetrics motion_metrics(const RasterState &rs);
+
+// motion.png pixels: hue = direction, value = magnitude / 16 px (clamped).
+void motion_image(const RasterState &rs, uint32_t *rgba);
 
 // Main-arena bytes init_worker_tile() takes for one worker.
 size_t worker_tile_bytes(int tile);

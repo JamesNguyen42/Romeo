@@ -56,18 +56,33 @@ struct Setup {
     int cameras, width, height, workers;
     bool depth; // view 0 keeps its last frame's depth: depth.png, depth.f32
     bool lidar; // kLidarViews depth-only faces at the rig origin, swept on sweep frames: points.ply
+    bool motion; // moving agents, ego rig cameras, view 0 motion vectors and blur: motion.png, motion metrics
+    bool ego_moving; // the ego rig drives along +z at kEgoSpeed (motion setups only)
 };
 
 constexpr Setup kSetups[] = {
-    {'A', 1, 1920, 1080, 4, false, false},
-    {'B', 4, 1920, 1080, 8, false, false},
-    {'C', 1, 3840, 2160, 8, false, false},
-    {'D', 8, 2560, 1440, 12, false, false},
-    {'E', 12, 1920, 1080, 16, false, false},
-    {'F', 5, 1920, 1080, 12, false, true},
-    {'G', 8, 2560, 1440, 16, true, false},
-    {'H', 2, 3840, 2160, 16, true, true},
+    {'A', 1, 1920, 1080, 4, false, false, false, false},
+    {'B', 4, 1920, 1080, 8, false, false, false, false},
+    {'C', 1, 3840, 2160, 8, false, false, false, false},
+    {'D', 8, 2560, 1440, 12, false, false, false, false},
+    {'E', 12, 1920, 1080, 16, false, false, false, false},
+    {'F', 5, 1920, 1080, 12, false, true, false, false},
+    {'G', 8, 2560, 1440, 16, true, false, false, false},
+    {'H', 2, 3840, 2160, 16, true, true, false, false},
+    {'I', 4, 1920, 1080, 12, false, false, true, false},
+    {'J', 4, 1920, 1080, 12, false, false, true, true},
 };
+
+// Lidar faces bin only the static scene, so a setup cannot combine a lidar with moving agents.
+constexpr bool motion_setups_valid() {
+    for (const Setup &s : kSetups)
+        if (s.motion && s.lidar) return false;
+    return true;
+}
+static_assert(motion_setups_valid(), "a motion setup must not have a lidar");
+
+// The view-table slot the workers read for the motion-blur pass of view 0.
+constexpr int kBlurPass = -1;
 
 // Entries the fixed view table needs: the camera views, then the lidar faces.
 constexpr int table_views(const Setup &s) { return s.cameras + (s.lidar ? kLidarViews : 0); }
@@ -88,9 +103,10 @@ struct Bugs {
     bool view_overflow = false; // view state array sized for 8 views
     bool disk_leak = false;     // per-view intermediate frames are never deleted
     bool mip_bias = false;      // texture LOD bias changed from 0 to +2.5
+    bool stale_agent_prev = false; // moving agents' previous-frame model transform is never updated after frame 0
 };
 
-constexpr std::string_view kUsage = "usage: romeo-render --setup A..H [--frames N] [--bug a,b] [--trace] [--lidar-every N] [--out dir] [--preview-frames 0..40] [--view-seed N]\n";
+constexpr std::string_view kUsage = "usage: romeo-render --setup A..J [--frames N] [--bug a,b] [--trace] [--lidar-every N] [--out dir] [--preview-frames 0..40] [--view-seed N]\n";
 constexpr int kMaxPreviewFrames = 40;
 constexpr int kPreviewWidth = 480, kPreviewHeight = 270;
 
@@ -118,7 +134,8 @@ size_t lidar_sweep_count(const Setup &s, int frames, int every) {
 // ---------------------------------------------------------------- arena plan
 
 // Trace capacity per thread. The main thread records one frame span and at most one wait_asset_lock span per
-// frame plus one lidar_sweep span per sweep, and each worker one raster_tiles span per camera view per frame and
+// frame plus one lidar_sweep span per sweep, and each worker one raster_tiles span per camera view per frame (one
+// motion_blur span per frame in motion setups) and
 // one raster_depth span per lidar face per sweep, so neither buffer can fill. The loader records one span per 3 s
 // load; `frames` covers that whenever frames average under 3 s, beyond that loads are dropped and counted.
 struct TracePlan {
@@ -127,7 +144,7 @@ struct TracePlan {
 
 TracePlan plan_trace(const Setup &s, int frames, bool trace, size_t sweeps) {
     if (!trace) return {0, 0, 0};
-    return {2 * size_t(frames) + sweeps, size_t(frames), size_t(s.cameras) * size_t(frames) + kLidarViews * sweeps};
+    return {2 * size_t(frames) + sweeps, size_t(frames), size_t(s.cameras + s.motion) * size_t(frames) + kLidarViews * sweeps};
 }
 
 // Every byte the run allocates, derived from the setup. Each term matches one allocation in main() or in the
@@ -146,7 +163,7 @@ ArenaPlan plan_arenas(const Setup &s, const Bugs &bugs, int frames, bool trace, 
 
     ArenaPlan p{};
     p.scratch_bytes = std::max(Arena::budget_bytes(thumbnail_bytes(s.width, s.height), alignof(uint32_t)), Arena::budget<double>(size_t(frames)));
-    p.main_bytes = raster_arena_bytes(s.width, s.height, tile, s.cameras, s.depth, s.lidar) // scene, views, depth, bins
+    p.main_bytes = raster_arena_bytes(s.width, s.height, tile, s.cameras, s.depth, s.lidar, s.motion) // scene, views, depth, bins, motion
                    + texture_arena_bytes(s.cameras)                           // 80 textures with mips, leak slots
                    + Arena::budget_bytes(kAssetBytes, kBlockAlign)            // asset generation and loader reads
                    + size_t(s.workers) * worker_tile_bytes(tile)              // per-worker depth and colour tile
@@ -155,7 +172,8 @@ ArenaPlan plan_arenas(const Setup &s, const Bugs &bugs, int frames, bool trace, 
                    size_t(s.workers) * Arena::budget<TraceEvent>(tp.worker_events)
                    + 3 * Arena::budget_bytes(kWriterBufferBytes)              // frames.csv, memory.csv, trace.json
                    + Arena::budget_bytes(p.scratch_bytes, kBlockAlign)
-                   + (s.lidar ? Arena::budget<LidarPoint>(kLidarPoints) + Arena::budget<double>(sweeps) : 0); // returns, sweep times
+                   + (s.lidar ? Arena::budget<LidarPoint>(kLidarPoints) + Arena::budget<double>(sweeps) : 0) // returns, sweep times
+                   + (s.motion ? Arena::budget_bytes(size_t(s.width) * size_t(s.height) * sizeof(uint32_t), kBlockAlign) : 0); // motion.png pixels
     // image.png and depth.png are written one after the other from the same PNG arena.
     p.png_bytes = std::max(png_scratch_bytes(s.width, s.height, 4), s.depth ? depth_png_scratch_bytes(s.width, s.height) : 0);
     p.copy_bytes = bugs.cache_leak ? kTextureCopyArenaBytes : 0;
@@ -271,8 +289,13 @@ void worker_main(WorkerContext *w) {
         if (w->stop->load(std::memory_order_relaxed)) return;
         double t = ms_since(w->t0);
         const int view = *w->frame_view;
-        raster_tiles(*w->raster, view, w->tile, w->index, w->count);
-        if (w->tracing) w->trace->span(view < w->raster->cameras ? TraceName::raster_tiles : TraceName::raster_depth, t, ms_since(w->t0) - t);
+        if (view == kBlurPass) {
+            blur_tiles(*w->raster, w->index, w->count);
+            if (w->tracing) w->trace->span(TraceName::motion_blur, t, ms_since(w->t0) - t);
+        } else {
+            raster_tiles(*w->raster, view, w->tile, w->index, w->count);
+            if (w->tracing) w->trace->span(view < w->raster->cameras ? TraceName::raster_tiles : TraceName::raster_depth, t, ms_since(w->t0) - t);
+        }
         w->sync->arrive_and_wait();
     }
 }
@@ -389,7 +412,8 @@ int main(int argc, char **argv) {
         else if (a == "--bug") {
             std::string_view list = next();
             auto has = [&](std::string_view b) { return list.find(b) != std::string_view::npos; };
-            bugs = {has("cache_leak"), has("loader_lock"), has("tile_size"), has("view_setup"), has("view_overflow"), has("disk_leak"), has("mip_bias")};
+            bugs = {has("cache_leak"), has("loader_lock"), has("tile_size"), has("view_setup"), has("view_overflow"), has("disk_leak"), has("mip_bias"),
+                    has("stale_agent_prev")};
         } else {
             write_stderr(kUsage);
             return 2;
@@ -457,7 +481,8 @@ int main(int argc, char **argv) {
 
     // Scene, per-view state and textures.
     RasterState raster;
-    if (!init_raster(raster, arena, W, H, tile, lod_bias, V, setup->depth, setup->lidar)) fatal_arena(log, "main", arena, plan.main_bytes);
+    if (!init_raster(raster, arena, W, H, tile, lod_bias, V, setup->depth, setup->lidar, setup->motion, setup->ego_moving))
+        fatal_arena(log, "main", arena, plan.main_bytes);
     TextureCache textures;
     if (!init_textures(textures, arena, V, bugs.cache_leak, copy_arena)) fatal_arena(log, "main", arena, plan.main_bytes);
 
@@ -489,6 +514,11 @@ int main(int argc, char **argv) {
         sweep_ms = arena.alloc<double>(planned_sweeps);
         if (!lidar_points || !sweep_ms) fatal_arena(log, "main", arena, plan.main_bytes);
     }
+
+    // motion.png pixels. Main thread only, after the frame loop.
+    uint32_t *motion_rgba = nullptr;
+    if (setup->motion && !(motion_rgba = static_cast<uint32_t *>(arena.alloc_bytes(size_t(W) * size_t(H) * sizeof(uint32_t), kBlockAlign))))
+        fatal_arena(log, "main", arena, plan.main_bytes);
 
     FixedArray<WorkerContext, kMaxWorkers> worker_ctx;
     for (int w = 0; w < workers; ++w) {
@@ -558,6 +588,9 @@ int main(int argc, char **argv) {
             if (trace && waited > 0.5) traces[0].span(TraceName::wait_asset_lock, tw, waited);
         }
 
+        // Agents move before any view is binned; workers only read the agent state.
+        if (setup->motion) step_motion(raster, f, bugs.stale_agent_prev);
+
         for (int v = 0; v < V; ++v) {
             if (bugs.view_setup)
                 for (Texture &t : textures.base) build_mips(t); // should run once at load, not per view per frame
@@ -585,6 +618,13 @@ int main(int argc, char **argv) {
             // Per-view intermediate thumbnail for the compositor. The fix overwrites one file per view.
             const Path thumb = thumbnail_path(tmp_dir.view(), v, f, bugs.disk_leak);
             write_thumbnail(thumb.data, raster.views[uint32_t(v)].color, W, H, scratch);
+        }
+
+        // Motion blur of view 0: the workers blur their tiles after every view of this frame is rasterized.
+        if (setup->motion) {
+            frame_view = kBlurPass;
+            sync.arrive_and_wait(); // start workers on the blur
+            sync.arrive_and_wait(); // wait for all tiles
         }
 
         // Lidar sweep: the depth-only faces go through the same workers and barrier, then the main thread samples
@@ -624,9 +664,16 @@ int main(int argc, char **argv) {
         log.line("error", "output_write_failed", "\"file\":\"points.ply\"");
 
     // Last frame of view 0: PNG for people, raw RGBA for exact comparison. The PNG arena is used once, so its
-    // pages go back before resident memory is measured.
-    const uint32_t *view0 = raster.views[0].color;
+    // pages go back before resident memory is measured. Motion setups write the blurred view 0, then motion.png.
+    MotionMetrics motion{};
+    if (setup->motion) motion = motion_metrics(raster);
+    const uint32_t *view0 = setup->motion ? raster.motion->blurred : raster.views[0].color;
     write_png(join_path(out, "image.png").data, view0, W, H, png_arena);
+    if (setup->motion) {
+        motion_image(raster, motion_rgba);
+        if (!write_png(join_path(out, "motion.png").data, motion_rgba, W, H, png_arena))
+            log.line("error", "output_write_failed", "\"file\":\"motion.png\"");
+    }
     if (setup->depth) {
         // View 0's depth buffer holds the last frame's window depth; convert it in place to eye-space metres.
         static_assert(std::endian::native == std::endian::little, "depth.f32 is little-endian");
@@ -694,6 +741,12 @@ int main(int argc, char **argv) {
         s.view_seed = view_seed;
         s.warmup_frames = int(skip);
         s.measured_frames = int(n);
+        s.motion = setup->motion;
+        s.ego_moving = setup->ego_moving;
+        s.agents = setup->motion ? kAgents : 0;
+        s.mv_error_px = motion.mv_error_px;
+        s.agent_edge_energy = motion.agent_edge_energy;
+        s.static_edge_energy = motion.static_edge_energy;
         write_summary(join_path(out, "summary.json").data, s);
     }
     if (preview_frames) {

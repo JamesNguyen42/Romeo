@@ -213,7 +213,8 @@ def handle(client: SocketModeClient, req: SocketModeRequest):
 # ---------------------------------------------------------------- case service -> Slack
 
 TOOL_WORDS = {"visualize": ":bar_chart: *Drew the evidence charts*", "write_test": ":test_tube: *Wrote a regression check*", "write_fix": ":hammer_and_wrench: *Wrote and compiled a fix*",
-              "open_pr": ":rocket: *Opened a pull request*", "git_diff": ":mag: *Read the change under investigation*", "plot": ":chart_with_upwards_trend: *Drew a chart*"}
+              "open_pr": ":rocket: *Opened a pull request*", "git_diff": ":mag: *Read the change under investigation*", "plot": ":chart_with_upwards_trend: *Drew a chart*",
+              "recall_similar": ":brain: *Recalled earlier findings*"}
 
 
 STAGE_OF_TOOL = {"write_test": 2, "write_fix": 3, "open_pr": 4}
@@ -269,7 +270,7 @@ def on_event(e):
                     else:
                         label = f"`{name}`"
                     post(cid, f"{label}\n```{path.read_text()[:2500]}```")
-            elif a.endswith(("frames.png", "trace.png", "memory.png", "render.png", "diff.png")):
+            elif a.endswith(("frames.png", "trace.png", "memory.png", "render.png", "diff.png", "recall.png", ".gif")):
                 upload(cid, a, a.split("/")[-1][:-4].replace("_", " ") + f" · {cid}")
     elif typ == "thought" and d.get("text"):
         post(cid, f":thought_balloon: {d['text'][:700]}")

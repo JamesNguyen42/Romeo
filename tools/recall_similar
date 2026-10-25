@@ -1,0 +1,204 @@
+#!/usr/bin/env python3
+"""Recall earlier findings: build a graph of every other case and the things it touched (files, functions, commits, rigs,
+symptoms, pull requests, regression checks), rank earlier cases by the entities they share with this case, grep their
+stored findings for the strongest shared terms, and draw this case's neighbourhood. Writes recall.svg/png and graph.json.
+
+The graph is rebuilt from the case service on every call, so it always matches the write-ahead log; there is no second
+store to keep in sync. Entity weights use inverse case frequency: a function named in one earlier case counts for more
+than a rig that every case ran on."""
+import json, math, os, re, subprocess, sys, urllib.request
+from collections import defaultdict
+from pathlib import Path
+sys.path.insert(0, os.path.dirname(__file__) + "/lib")
+from tool import INPUT, JOB, PRODUCT, finish
+
+API = os.environ.get("ROMEO_API", "http://127.0.0.1:8790")
+CASE = INPUT["case_id"]
+MAX_CASE_TEXT = 200_000  # bytes of event text read per case; bounds the work as memory grows
+TYPE_WEIGHT = {"function": 3.0, "file": 3.0, "commit": 3.0, "check": 2.0, "symptom": 1.5, "rig": 1.0}
+SYMPTOMS = {  # symptom -> words that name it in reports and evidence
+    "crash": ("crash", "sigabrt", "abort", "exit code -6", "exited with an error", "fatal"),
+    "frame spikes": ("spike", "hitch", "stutter", "p99", "slow frame"),
+    "memory growth": ("memory grow", "memory growth", "resident memory", "leak", "memory grew"),
+    "lock wait": ("asset_lock", "waits on the", "waited on", "lock wait", "under lock"),
+    "motion vectors": ("motion vector", "mv_error", "motion-vector", "blur", "pedestrian", "agent"),
+    "depth/lidar": ("depth", "lidar"),
+}
+
+
+def api(path):
+    with urllib.request.urlopen(API + path, timeout=30) as r:
+        return json.loads(r.read())
+
+
+# Metric names appear in every telemetry report, so they say nothing about which code is involved.
+METRICS = {"p50_ms", "p99_ms", "max_ms", "memory_growth_mb", "mv_error_px", "exit_code", "resident_bytes", "t_ms", "agent_edge_energy",
+           "static_edge_energy", "spike_frames"}
+
+
+def identifiers():
+    """snake_case identifiers defined or used in the product source; only these count as function/variable entities."""
+    names = set()
+    for p in list(PRODUCT.glob("renderer/*.[ch]pp")) + list(PRODUCT.glob("core/*.[ch]pp")):
+        names.update(m for m in re.findall(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b", p.read_text(errors="ignore")) if len(m) >= 6)
+    return names - METRICS
+
+
+def strings(v, out):
+    if isinstance(v, str):
+        out.append(v)
+    elif isinstance(v, dict):
+        for k, x in v.items():
+            if k not in ("reasoning", "candidates", "dir"):  # model reasoning is not a finding; candidates are Clef scores
+                strings(x, out)
+    elif isinstance(v, list):
+        for x in v:
+            strings(x, out)
+
+
+def entities(text, setup, idents):
+    low = text.lower()
+    e = {("rig", setup)} if setup else set()
+    e |= {("file", f) for f in re.findall(r"\b(?:[\w-]+/)*[\w-]+\.(?:cpp|hpp|h|c)\b", text)}
+    e |= {("commit", h) for h in re.findall(r"\b[0-9a-f]{7,12}\b", text) if re.search(r"[a-f]", h) and re.search(r"\d", h)}
+    e |= {("function", w) for w in re.findall(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b", text) if w in idents}
+    e |= {("symptom", s) for s, words in SYMPTOMS.items() if any(w in low for w in words)}
+    e |= {("check", c) for c in re.findall(r"\b(?:mv_error_px|p99_ms|memory_growth_mb|max_ms|exit_code)\s*[<>]=?\s*[\d.]+", text)}
+    return e
+
+
+def case_record(c, idents):
+    ex = api(f"/api/cases/{c['id']}/export")
+    parts, found, finding, fix, prs, checks = [], [], "", "", [], []
+    for ev in ex.get("events", []):
+        d = ev.get("data") or {}
+        strings(d, parts)
+        if ev["type"] in ("fact", "conclusion", "done"):
+            strings(d, found)
+        if ev["type"] == "conclusion":
+            finding, fix = d.get("diagnosis", ""), d.get("fix", "")
+        elif ev["type"] == "done" and not finding:
+            finding = d.get("summary", "")
+        if isinstance(d.get("data"), dict) and d["data"].get("pr_url"):
+            prs.append(d["data"]["pr_url"])
+        if ev["type"] == "action_result" and d.get("tool") == "write_test" and d.get("exit_code") == 0:
+            checks.append(d.get("summary", ""))
+    text = "\n".join(parts)[:MAX_CASE_TEXT]
+    return {"id": c["id"], "title": c["title"], "status": c["status"], "setup": c.get("setup", ""), "text": text,
+            "found": "\n".join(found)[:MAX_CASE_TEXT], "finding": finding, "fix": fix, "prs": sorted(set(prs)), "checks": checks, "entities": entities(text, c.get("setup", ""), idents)}
+
+
+idents = identifiers()
+cases = api("/api/cases")
+here = next((c for c in cases if c["id"] == CASE), {"id": CASE, "title": INPUT.get("title", ""), "setup": INPUT.get("setup", "")})
+query_text = "\n".join([INPUT.get("title", ""), INPUT.get("report", "")] + INPUT.get("facts", []))
+query = entities(query_text, INPUT.get("setup", ""), idents)
+past = [case_record(c, idents) for c in cases if c["id"] != CASE]
+
+# Graph: case -> entity edges. df = how many earlier cases touch an entity.
+df = defaultdict(int)
+for r in past:
+    for e in r["entities"]:
+        df[e] += 1
+n = max(len(past), 1)
+idf = lambda e: TYPE_WEIGHT[e[0]] * math.log(1 + n / df[e]) if df[e] else 0.0
+
+scored = []
+for r in past:
+    shared = query & r["entities"]
+    score = sum(idf(e) for e in shared)
+    if score > 0:
+        scored.append((score, r, sorted(shared, key=idf, reverse=True)))
+scored.sort(key=lambda x: -x[0])
+
+# Second hop: an earlier case that shares a file, function or commit with a top match is related through that code.
+top_ids = {r["id"] for _, r, _ in scored[:3]}
+code = lambda r: {e for e in r["entities"] if e[0] in ("file", "function", "commit")}
+hop2 = []
+for r in past:
+    if r["id"] in top_ids:
+        continue
+    for _, t, _ in scored[:3]:
+        via = sorted(code(r) & code(t), key=idf, reverse=True)
+        if via:
+            hop2.append((r, t, via))
+            break
+
+# Grep: lines of earlier findings that contain the strongest shared code entity.
+terms = [e[1] for _, _, sh in scored[:3] for e in sh if e[0] in ("function", "file", "commit")][:3]
+grep_hits = []
+for _, r, _ in scored[:3]:
+    for line in r["found"].splitlines():
+        if any(t in line for t in terms) and 20 < len(line) < 400 and len(grep_hits) < 6:
+            grep_hits.append((r["id"], line.strip()))
+            break
+
+facts = [f"Memory graph: {len(past)} earlier case(s), {len(df)} entities, {sum(len(r['entities']) for r in past)} edges; "
+         f"this case names {len(query)} entities."]
+for score, r, shared in scored[:3]:
+    names = ", ".join(f"{t} {v}" for t, v in shared[:5])
+    line = f"Earlier case {r['id']} ({r['title'][:70]}; {r['status']}) shares {names}."
+    if r["finding"]:
+        line += f" Its finding: {r['finding'][:300]}"
+    if r["fix"]:
+        line += f" Its fix: {r['fix'][:200]}"
+    if r["prs"]:
+        line += f" Pull request: {r['prs'][-1]}."
+    if r["checks"]:
+        line += f" Regression check: {r['checks'][-1][:160]}"
+    facts.append(line)
+for r, t, via in hop2[:2]:
+    facts.append(f"Related through the code: {r['id']} ({r['title'][:60]}) touches {via[0][1]}, as {t['id']} does.")
+for cid, line in grep_hits[:3]:
+    facts.append(f"grep {cid}: {line[:240]}")
+if not scored:
+    facts.append("No earlier case shares a file, function, commit, symptom or rig with this case; this is a new kind of problem.")
+
+# Drawing: this case on the left, shared entities in the middle, earlier cases on the right.
+STYLE = ("<style>.t{font:700 22px Helvetica,Arial,sans-serif;fill:#111827}.s{font:14px Helvetica,Arial,sans-serif;fill:#4b5563}"
+         ".l{font:600 13px Helvetica,Arial,sans-serif;fill:#1f2937}.a{font:12px Menlo,monospace;fill:#374151}</style>")
+COL = {"function": "#0f766e", "file": "#0f766e", "commit": "#6366f1", "check": "#b45309", "symptom": "#dc2626", "rig": "#6b7280"}
+show = scored[:3]
+ents = []
+for _, _, sh in show:
+    for e in sh[:5]:
+        if e not in ents:
+            ents.append(e)
+ents = ents[:12]
+w, row = 1400, 46
+h = max(260, 100 + max(row * len(ents), row * 1.6 * (len(show) + len(hop2[:2]))) + 20)
+ey = {e: 100 + i * row for i, e in enumerate(ents)}
+cy = {r["id"]: 100 + i * (row * 1.6) for i, (_, r, _) in enumerate(show)}
+for i, (r, _, _) in enumerate(hop2[:2]):
+    cy[r["id"]] = 100 + (len(show) + i) * (row * 1.6)
+body = f'<rect x="28" y="{h / 2 - 40:.0f}" width="250" height="80" rx="10" fill="#0f766e"/>' \
+       f'<text x="44" y="{h / 2 - 12:.0f}" class="l" fill="#ffffff" style="fill:#fff">{CASE} (this case)</text>' \
+       f'<text x="44" y="{h / 2 + 12:.0f}" class="a" style="fill:#d1fae5">{here.get("title", "")[:30]}</text>'
+for e, y in ey.items():
+    body += f'<path d="M278 {h / 2:.0f} C 380 {h / 2:.0f}, 380 {y + 16}, 480 {y + 16}" fill="none" stroke="#cbd5e1" stroke-width="1.5"/>'
+    body += f'<rect x="480" y="{y}" width="330" height="32" rx="6" fill="#f9fafb" stroke="{COL[e[0]]}"/>' \
+            f'<text x="492" y="{y + 21}" class="a"><tspan style="fill:{COL[e[0]]}">{e[0]}</tspan> {e[1][:34]}</text>'
+for _, r, sh in show:
+    y = cy[r["id"]]
+    for e in sh[:5]:
+        if e in ey:
+            body += f'<path d="M810 {ey[e] + 16} C 880 {ey[e] + 16}, 880 {y + 24}, 950 {y + 24}" fill="none" stroke="{COL[e[0]]}" stroke-opacity="0.55" stroke-width="2"/>'
+    pr = f" · PR #{r['prs'][-1].rsplit('/', 1)[-1]}" if r["prs"] else ""
+    body += f'<rect x="950" y="{y}" width="420" height="48" rx="8" fill="#ffffff" stroke="#111827"/>' \
+            f'<text x="964" y="{y + 20}" class="l">{r["id"]} · {r["status"]}{pr}</text><text x="964" y="{y + 38}" class="a">{r["title"][:52]}</text>'
+for r, t, via in hop2[:2]:
+    y = cy[r["id"]]
+    body += f'<path d="M1370 {cy[t["id"]] + 24} C 1395 {cy[t["id"]] + 24}, 1395 {y + 24}, 1370 {y + 24}" fill="none" stroke="#6366f1" stroke-dasharray="5 4"/>' \
+            f'<rect x="950" y="{y}" width="420" height="48" rx="8" fill="#f5f3ff" stroke="#6366f1" stroke-dasharray="5 4"/>' \
+            f'<text x="964" y="{y + 20}" class="l">{r["id"]} · via {via[0][1][:28]}</text><text x="964" y="{y + 38}" class="a">{r["title"][:52]}</text>'
+title = f"Recall: {CASE} matches {', '.join(r['id'] for _, r, _ in show)} in case memory" if scored else f"Recall: no earlier case matches {CASE}"
+svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h + 40}" width="{w}" height="{h + 40}">{STYLE}<rect width="{w}" height="{h + 40}" fill="#fff"/>'
+       f'<text x="28" y="40" class="t">{title}</text><text x="28" y="64" class="s">Graph of {len(past)} earlier cases and {len(df)} entities, '
+       f'rebuilt from the case log · teal: code · violet: commits · red: symptoms · amber: checks</text>{body}</svg>')
+(JOB / "recall.svg").write_text(svg)
+subprocess.run(["rsvg-convert", "-z", "1.5", "-o", str(JOB / "recall.png"), str(JOB / "recall.svg")], capture_output=True)
+(JOB / "graph.json").write_text(json.dumps({"cases": [{"id": r["id"], "title": r["title"], "entities": sorted(map(list, r["entities"]))} for r in past],
+                                            "query": sorted(map(list, query))}, indent=1))
+arts = ["recall.png" if (JOB / "recall.png").is_file() else "recall.svg", "graph.json"]
+summary = (f"Recalled {min(len(scored), 3)} earlier case(s): " + ", ".join(r["id"] for _, r, _ in scored[:3])) if scored else "No earlier case matches this one"
+finish(summary, facts, arts, {"matches": [{"id": r["id"], "score": round(s, 2), "shared": [list(e) for e in sh]} for s, r, sh in scored[:5]]})

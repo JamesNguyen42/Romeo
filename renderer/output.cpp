@@ -185,7 +185,7 @@ void Log::line(std::string_view level, std::string_view msg, std::string_view ex
 // ---------------------------------------------------------------- trace.json
 
 bool write_trace(const char *path, const TraceBuffer *buffers, uint32_t buffer_count, uint8_t *io_buffer, size_t io_bytes) {
-    static constexpr std::string_view kNames[] = {"frame", "wait_asset_lock", "raster_tiles", "asset_read_parse", "lidar_sweep", "raster_depth"};
+    static constexpr std::string_view kNames[] = {"frame", "wait_asset_lock", "raster_tiles", "asset_read_parse", "lidar_sweep", "raster_depth", "motion_blur"};
     FileWriter w;
     if (!w.open(path, io_buffer, io_bytes)) return false;
     w.add("{\"traceEvents\":[");
@@ -336,6 +336,12 @@ bool write_summary(const char *path, const RunSummary &s) {
     if (s.lidar) b.add(",\"lidar_points\":").num(s.lidar_points).add(",\"lidar_sweep_ms\":").num(s.lidar_sweep_ms, 3);
     else b.add(",\"lidar_points\":null,\"lidar_sweep_ms\":null");
     b.add(",\"view_seed\":").num(s.view_seed).add(",\"warmup_frames\":").num(s.warmup_frames);
-    b.add(",\"measured_frames\":").num(s.measured_frames).add("}\n");
+    b.add(",\"measured_frames\":").num(s.measured_frames);
+    if (s.motion) {
+        b.add(",\"ego_moving\":").boolean(s.ego_moving).add(",\"agents\":").num(s.agents);
+        b.add(",\"mv_error_px\":").num(s.mv_error_px, 4).add(",\"agent_edge_energy\":").num(s.agent_edge_energy, 4);
+        b.add(",\"static_edge_energy\":").num(s.static_edge_energy, 4);
+    }
+    b.add("}\n");
     return !b.overflowed() && write_file(path, b.data, b.len);
 }
