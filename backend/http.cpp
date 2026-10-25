@@ -596,8 +596,7 @@ static void handle(Service &s, Conn &conn, const Request &r) {
         return;
     }
     if (post && path == "/api/demo/load") {
-        // With ROMEO_MAX_ACTIVE set, only that many cases open now; open_next_demo_case() opens the rest one by one.
-        s.store->demo_rolling = s.cfg.max_active > 0;
+        // With ROMEO_MAX_ACTIVE set, only that many cases open now; the agent tick opens the rest as cases finish.
         int opened = 0;
         for (const CaseDef &d : store.defs) {
             if (find_case(store, d.id.view())) continue;
