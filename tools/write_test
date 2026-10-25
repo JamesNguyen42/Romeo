@@ -1,42 +1,50 @@
 #!/usr/bin/env python3
 """Ask Ornith to write a regression check from the evidence, then prove it: it must fail on the case revision and pass on the known-good revision."""
 import sys, os; sys.path.insert(0, os.path.dirname(__file__) + "/lib")
+import json
 from tool import INPUT, JOB, sh, ornith, fenced, finish, build, case_rev
 
-CLI = """The renderer binary is passed as $1 and an empty output directory as $2.
-Run it as: "$1" --setup <A..E> --frames <N> [--trace] --out "$2"
-It writes $2/summary.json with keys: p50_ms, p95_ms, p99_ms, max_ms, spike_frames, resident_end_bytes, cache_entries, tmp_bytes, total_ms
-(statistics skip the first 40 frames), plus $2/frames.csv (frame,ms), $2/memory.csv (t_ms,resident_bytes), $2/log.jsonl.
-A crash shows as a non-zero exit code of the renderer. jq and python3 are available."""
+METRICS = """A fixed runner renders once and computes a metrics dict m. Available keys:
+p50_ms, p95_ms, p99_ms, max_ms, spike_frames (frames over 2x median, after 40 warm-up frames), resident_end_bytes,
+memory_start_mb, memory_end_mb, memory_growth_mb, tmp_bytes, cache_entries, exit_code, crashed (bool), fatal_lines,
+lock_waits and lock_wait_max_ms (only when trace is true), and when the setup has motion: mv_error_px,
+agent_edge_energy, static_edge_energy."""
 setup = INPUT.get("setup", "A")
 bad_bin, out = build(case_rev())
 good_bin, out2 = build(INPUT.get("rev_good", "main"))
 if not bad_bin or not good_bin:
     finish("Could not build both revisions for the check", ["Build failed: " + (out + out2)[-300:]], data={"error": True})
+RUNCHECK = os.path.join(os.path.dirname(__file__), "lib", "runcheck.py")
 
 feedback, attempts = "", []
 for attempt in (1, 2):
     content, reasoning = ornith(
-        "You write POSIX sh regression checks for a renderer. Output one ```sh block only. The script must exit 1 when the "
-        "problem described by the evidence is present and exit 0 when it is absent. Use thresholds with margin; keep runtime under 60 s.",
-        f"{CLI}\nSetup under investigation: {setup}.\n\nCase:\n{INPUT['case_state']}\n{feedback}", 900)
-    script = fenced(content, "sh")
+        "You write regression checks as data. Answer with JSON only: {\"setup\": letter, \"frames\": 300-1200, \"trace\": true|false, "
+        "\"expect\": one Python boolean expression over m that is true when the problem is ABSENT, \"explain\": one sentence}. "
+        "Use thresholds with margin, based on the measured numbers in the evidence.",
+        f"{METRICS}\nSetup under investigation: {setup}.\n\nCase:\n{INPUT['case_state']}\n{feedback}", 600)
+    spec = json.loads(content[content.find("{"):content.rfind("}") + 1])
+    expect = str(spec["expect"]).replace("\n", " ")
+    script = (f"#!/bin/sh\n# {spec.get('explain', '')}\n# Passes when: {expect}\n"
+              f"exec python3 \"$(dirname \"$0\")/runcheck.py\" \"$1\" \"$2\" {spec.get('setup', setup)} {int(spec.get('frames', 600))} "
+              f"{1 if spec.get('trace') else 0} '{expect}'\n")
     path = JOB / f"check-{attempt}.sh"
-    path.write_text(script + "\n"); path.chmod(0o755)
+    path.write_text(script); path.chmod(0o755)
+    import shutil; shutil.copy(RUNCHECK, JOB / "runcheck.py")
     results = {}
     for name, binary in (("case", bad_bin), ("good", good_bin)):
         run_dir = JOB / f"run-{attempt}-{name}"; run_dir.mkdir(exist_ok=True)
         code, log = sh("sh", str(path), binary, str(run_dir), timeout=300)
         results[name] = code
         (JOB / f"check-{attempt}-{name}.log").write_text(log)
-    attempts.append({"attempt": attempt, "exit_on_case_rev": results["case"], "exit_on_good_rev": results["good"], "reasoning": reasoning[:2000]})
-    if results["case"] != 0 and results["good"] == 0:
-        (JOB / "check.sh").write_text(script + "\n"); (JOB / "check.sh").chmod(0o755)
-        finish(f"Agent-written check fails on {case_rev()} and passes on {INPUT.get('rev_good', 'main')} (attempt {attempt})",
-               [f"Wrote a regression check (attempt {attempt}). It exits {results['case']} on the case revision and 0 on the known-good revision, so it detects this problem."],
-               ["check.sh", f"check-{attempt}-case.log", f"check-{attempt}-good.log"], {"attempts": attempts, "check": str(JOB / "check.sh")})
-    feedback = (f"\nYour previous script exited {results['case']} on the problem build (must be non-zero) and {results['good']} on the good build "
-                f"(must be 0). Its output on the problem build was:\n{(JOB / f'check-{attempt}-case.log').read_text()[-1500:]}\nFix it.")
+    attempts.append({"attempt": attempt, "expect": expect, "exit_on_case_rev": results["case"], "exit_on_good_rev": results["good"], "reasoning": reasoning[:2000]})
+    if results["case"] == 1 and results["good"] == 0:
+        (JOB / "check.sh").write_text(script); (JOB / "check.sh").chmod(0o755)
+        finish(f"Agent-written check fails on {case_rev()} and passes on {INPUT.get('rev_good', 'main')}: {expect}",
+               [f"Regression check (attempt {attempt}): passes when {expect}. It fails on the release build and passes on the known-good build, so it detects this problem deterministically."],
+               ["check.sh", "runcheck.py", f"check-{attempt}-case.log", f"check-{attempt}-good.log"], {"attempts": attempts, "check": str(JOB / "check.sh"), "expect": expect})
+    feedback = (f"\nYour previous condition `{expect}` gave exit {results['case']} on the problem build (must be 1) and {results['good']} on the good build (must be 0). "
+                f"Measured metrics on the problem build: {(JOB / f'check-{attempt}-case.log').read_text()[:900]}\nMeasured on the good build: {(JOB / f'check-{attempt}-good.log').read_text()[:900]}\nAdjust the condition.")
 finish("Could not write a check that separates the two revisions in 2 attempts",
        [f"Two check attempts did not separate the revisions (exit codes: {[(a['exit_on_case_rev'], a['exit_on_good_rev']) for a in attempts]})."],
        [f"check-{a['attempt']}.sh" for a in attempts], {"attempts": attempts})

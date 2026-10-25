@@ -24,13 +24,21 @@ for attempt in (1, 2):
     (JOB / f"fix-{attempt}.patch").write_text(patch)
     work = Path(tempfile.mkdtemp(prefix=f"fix-{case}-"))
     git("worktree", "add", "-f", "-B", branch, str(work), rev)
-    code, out = sh("git", "-C", str(work), "apply", "--whitespace=nowarn", str(JOB / f"fix-{attempt}.patch"))
+    code, out = sh("git", "-C", str(work), "apply", "--recount", "--whitespace=nowarn", str(JOB / f"fix-{attempt}.patch"))
+    if code != 0:  # model-written hunks often miscount lines; patch with fuzz tolerates that
+        code, out = sh("patch", "-p1", "-F3", "-d", str(work), "-i", str(JOB / f"fix-{attempt}.patch"))
     if code != 0:
         attempts.append({"attempt": attempt, "applied": False, "error": out[-600:]})
         feedback = f"\nYour previous patch did not apply: {out[-600:]}\nProduce a patch against exactly the source shown."
         git("worktree", "remove", "--force", str(work), check=False)
         continue
-    sh("git", "-C", str(work), "-c", "user.name=Romeo agent", "-c", "user.email=romeo-agent@users.noreply.github.com",
+    if check:  # the regression check ships with the fix, so CI can run it without a model
+        import shutil
+        (work / "checks").mkdir(exist_ok=True)
+        shutil.copy(check, work / "checks" / f"{case}.sh")
+        shutil.copy(Path(check).parent / "runcheck.py", work / "checks" / "runcheck.py")
+        sh("git", "-C", str(work), "add", "checks")
+    sh("git", "-C", str(work), "-c", "user.name=Juliette agent", "-c", "user.email=juliette-agent@users.noreply.github.com",
        "commit", "-qam", f"Fix {case}: {INPUT.get('title', 'regression')}")
     fix_sha = git("rev-parse", branch)
     git("worktree", "remove", "--force", str(work), check=False)
