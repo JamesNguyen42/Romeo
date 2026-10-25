@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Show the change under investigation: commits and diff between the known-good revision and the case revision."""
 import sys; sys.path.insert(0, __import__("os").path.dirname(__file__) + "/lib")
-from tool import INPUT, JOB, git, case_rev, finish
+from tool import INPUT, JOB, git, case_rev, finish, ref
 
-good, bad = INPUT.get("rev_good", "main"), case_rev()
-log = git("log", "--format=%h %s", f"origin/{good}..origin/{bad}", check=False) or git("log", "--format=%h %s", f"{good}..{bad}")
-stat = git("diff", "--stat", f"{good}...{bad}", check=False) or git("diff", "--stat", f"origin/{good}...origin/{bad}")
-diff = git("diff", "-U4", f"{good}...{bad}", check=False) or git("diff", "-U4", f"origin/{good}...origin/{bad}")
+good, bad = ref(INPUT.get("rev_good", "main")), ref(case_rev())
+log = git("log", "--format=%h %s", f"{good}..{bad}")
+stat = git("diff", "--stat", f"{good}...{bad}")
+diff = git("diff", "-U4", f"{good}...{bad}")
 (JOB / "change.patch").write_text(diff + "\n")
 files = [l.split("|")[0].strip() for l in stat.splitlines() if "|" in l]
 hunks = [l for l in diff.splitlines() if l.startswith(("+", "-")) and not l.startswith(("+++", "---"))]

@@ -5,11 +5,13 @@ from pathlib import Path
 from tool import INPUT, JOB, finish
 
 case = INPUT["case_id"]
-runs = sorted((Path(p).parent for p in glob.glob(str(JOB.parent / f"{case}-*" / "summary.json"))), key=lambda p: p.stat().st_mtime)
+# Any run with samples counts, including runs that crashed before writing summary.json.
+want = "memory.csv" if (INPUT.get("args", {}).get("series") == "memory" or "memory" in INPUT["case_state"].lower()) else "frames.csv"
+runs = sorted((Path(p).parent for p in glob.glob(str(JOB.parent / f"{case}-*" / want)) if Path(p).stat().st_size > 40), key=lambda p: p.stat().st_mtime)
 if not runs:
     finish("No run to chart yet", ["Plot skipped: this case has no renderer run yet."], data={"error": True})
 run = runs[-1]
-kind = INPUT.get("args", {}).get("series") or ("memory" if "memory" in INPUT["case_state"].lower() else "frames")
+kind = "memory" if want == "memory.csv" else "frames"
 if kind == "memory":
     pts = [(float(r["t_ms"]) / 1000, int(r["resident_bytes"]) / 2**20) for r in csv.DictReader(open(run / "memory.csv"))]
     title, unit = "Resident memory", "MiB"

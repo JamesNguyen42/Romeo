@@ -57,6 +57,13 @@ def fenced(text, lang):
     return text.strip()
 
 
+def ref(rev):
+    """The fetched remote branch when it exists (the product clone tracks origin), otherwise the name as given."""
+    sh("git", "-C", str(PRODUCT), "fetch", "-q", "origin", timeout=60)
+    code, _ = sh("git", "-C", str(PRODUCT), "rev-parse", "--verify", "-q", f"origin/{rev}^{{commit}}")
+    return f"origin/{rev}" if code == 0 else rev
+
+
 def case_rev():
     return INPUT.get("rev") or f"change/{INPUT['case_id']}"
 
