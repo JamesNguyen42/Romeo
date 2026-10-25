@@ -301,6 +301,23 @@ void apply(Case &c, yyjson_val *ev) {
         if (yyjson_get_str(yyjson_obj_get(d, "difficulty"))) assign_logged(c.def.difficulty, str_of(d, "difficulty"), c, "difficulty");
         if (yyjson_get_str(yyjson_obj_get(d, "rev"))) assign_logged(c.def.rev, str_of(d, "rev"), c, "rev");
         if (yyjson_get_str(yyjson_obj_get(d, "rev_good"))) assign_logged(c.def.rev_good, str_of(d, "rev_good"), c, "rev_good");
+        if (yyjson_get_str(yyjson_obj_get(d, "scenario_id"))) assign_logged(c.def.scenario_id, str_of(d, "scenario_id"), c, "scenario_id");
+        if (yyjson_get_str(yyjson_obj_get(d, "mode"))) c.def.comparison = str_of(d, "mode") == "comparison";
+        if (yyjson_obj_get(d, "view_seed")) c.def.view_seed = uint32_t(yyjson_get_uint(yyjson_obj_get(d, "view_seed")));
+        // Execution metadata belongs to the run. Replaying a fresh run must not depend on a
+        // template with the same id, or on a subsequently edited scenarios file.
+        if (yyjson_val *execution = yyjson_obj_get(d, "execution")) {
+            assign_logged(c.def.bugs, str_of(execution, "bugs"), c, "bugs");
+            assign_logged(c.def.rev, str_of(execution, "rev"), c, "rev");
+            assign_logged(c.def.rev_good, str_of(execution, "rev_good"), c, "rev_good");
+            c.def.rev_good_given = yyjson_get_bool(yyjson_obj_get(execution, "rev_good_given"));
+            c.def.withhold.clear();
+            size_t i, n;
+            yyjson_val *value;
+            yyjson_arr_foreach(yyjson_obj_get(execution, "withhold"), i, n, value) {
+                if (auto *slot = c.def.withhold.push()) slot->assign(yyjson_get_str(value) ? yyjson_get_str(value) : "");
+            }
+        }
     } else if (type == "action_requested") {
         std::string_view id = str_of(d, "action_id");
         Pending *p = const_cast<Pending *>(c.find_pending(id));
@@ -356,7 +373,7 @@ void apply(Case &c, yyjson_val *ev) {
         assign_logged(c.diagnosis, str_of(d, "diagnosis"), c, "diagnosis");
     } else if (type == "stopped") {
         c.status = Status::stopped;
-    } else if (type == "done") {
+    } else if (type == "done" || type == "comparison_complete") {
         c.status = Status::done;
     } else if (type == "message") {
         Message &m = c.messages[c.message_count % kRecentMessages];

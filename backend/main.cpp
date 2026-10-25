@@ -227,6 +227,7 @@ void read_meminfo(Sampler &m) {
 // sscanf("%lf, %lf, %lf, %lf") semantics: values parsed before the first mismatch are kept, the rest stay 0.
 void parse_gpu_line(Sampler &m) {
     double v[4] = {0, 0, 0, 0};
+    int parsed = 0;
     std::string_view rest(m.line, m.line_len);
     for (int k = 0; k < 4; ++k) {
         size_t b = rest.find_first_not_of(" \t\r\n");
@@ -236,6 +237,7 @@ void parse_gpu_line(Sampler &m) {
         auto r = std::from_chars(rest.data(), rest.data() + rest.size(), x);
         if (r.ec != std::errc()) break;
         v[k] = x;
+        ++parsed;
         rest = rest.substr(size_t(r.ptr - rest.data()));
         if (k < 3) {
             if (rest.empty() || rest[0] != ',') break;
@@ -246,6 +248,8 @@ void parse_gpu_line(Sampler &m) {
     m.gpu_power = v[1];
     m.gpu_temp = v[2];
     m.gpu_clock = v[3];
+    m.gpu_available = parsed == 4;
+    if (m.gpu_available) m.gpu_sample_ms = now_ms();
 }
 
 void sampler_finish(Sampler &m) {
@@ -257,8 +261,9 @@ void sampler_finish(Sampler &m) {
 
 void sampler_tick(Sampler &m, int64_t now) {
     if (m.pipe_fd >= 0) {
-        if (now - m.started_ms > 5000) { // nvidia-smi hung: the snapshot keeps its previous GPU values
+        if (now - m.started_ms > 5000) { // Keep the last values for inspection, but mark them unavailable.
             kill(m.pid, SIGKILL);
+            m.gpu_available = false;
             close(m.pipe_fd);
             m.pipe_fd = -1;
             m.pid = -1;

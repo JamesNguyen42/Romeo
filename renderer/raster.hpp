@@ -116,7 +116,11 @@ bool init_worker_tile(WorkerTile &wt, romeo::Arena &arena, int tile);
 // Main thread: transform the scene for camera view `view` of frame `frame` and rebuild that view's bins. Returns
 // false only when the texture cache cannot make a copy (cache_leak with a full texture-copy arena); the view is then
 // partially binned and must not be rasterized.
-bool bin_view(RasterState &rs, TextureCache &cache, int view, int frame);
+bool bin_view(RasterState &rs, TextureCache &cache, int view, int frame, uint32_t view_seed = 0);
+
+// A seed changes the orbit's starting angle, not the scene or its textures. Seed 0 preserves the original view.
+// Reuse the same seed when comparing builds so every camera position matches.
+float view_camera_angle(int view, int views, int frame, uint32_t view_seed);
 
 // Main thread: transform the scene for lidar face `face` (0 .. kLidarViews - 1) and rebuild its bins. Depth-only
 // triangles carry no texture, so the texture cache is never touched.

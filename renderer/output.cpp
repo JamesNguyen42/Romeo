@@ -335,6 +335,7 @@ bool write_summary(const char *path, const RunSummary &s) {
     b.add(",\"cameras\":").num(s.cameras).add(",\"depth\":").boolean(s.depth).add(",\"lidar\":").boolean(s.lidar);
     if (s.lidar) b.add(",\"lidar_points\":").num(s.lidar_points).add(",\"lidar_sweep_ms\":").num(s.lidar_sweep_ms, 3);
     else b.add(",\"lidar_points\":null,\"lidar_sweep_ms\":null");
-    b.add("}\n");
+    b.add(",\"view_seed\":").num(s.view_seed).add(",\"warmup_frames\":").num(s.warmup_frames);
+    b.add(",\"measured_frames\":").num(s.measured_frames).add("}\n");
     return !b.overflowed() && write_file(path, b.data, b.len);
 }

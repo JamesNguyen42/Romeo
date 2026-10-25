@@ -315,8 +315,15 @@ bool init_worker_tile(WorkerTile &wt, Arena &arena, int tile) {
 
 // ---------------------------------------------------------------- transforms and binning (main thread)
 
-bool bin_view(RasterState &rs, TextureCache &cache, int v, int f) {
-    float angle = float(v) * 6.2831853f / float(rs.cameras) + float(f) * 0.01f;
+float view_camera_angle(int view, int views, int frame, uint32_t view_seed) {
+    // Integer multiplication gives consecutive seeds well-separated, deterministic orbit positions.
+    const uint32_t orbit = view_seed * 2654435761u;
+    const float offset = float(orbit >> 8) * (6.2831853f / 16777216.0f);
+    return float(view) * 6.2831853f / float(views) + float(frame) * 0.01f + offset;
+}
+
+bool bin_view(RasterState &rs, TextureCache &cache, int v, int f, uint32_t view_seed) {
+    float angle = view_camera_angle(v, rs.cameras, f, view_seed);
     M4 mvp = mul(rs.setup.proj, look_at({std::cos(angle) * 34, 14, std::sin(angle) * 34}, {0, 0, 0}));
     return bin_triangles<true>(rs.setup, rs.scene, rs.views[uint32_t(v)], mvp, &cache, v, f);
 }

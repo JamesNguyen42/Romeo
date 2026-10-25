@@ -1,0 +1,15 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
+const root=path.dirname(fileURLToPath(import.meta.url));
+const read=async name=>(await fs.readFile(path.join(root,'story',name),'utf8')).replace(/\r\n/g,'\n');
+const [wrapper,source,data,logic]=await Promise.all(['runtime.html','template.html','live-data.js','logic.js'].map(read));
+if(!source.includes('/*__ROMEO_LIVE_LOGIC__*/'))throw new Error('The original story template is missing its live-data slot.');
+const template=source.replace('/*__ROMEO_LIVE_LOGIC__*/',data.replace(/^export /gm,'')+'\n'+logic);
+const json=JSON.stringify(template).replace(/</g,'\\u003c');
+const result=wrapper.replace(/(<script type="__bundler\/template">\s*)([\s\S]*?)(\s*<\/script>)/,(_,a,b,c)=>a+json+c).replace(/[\t ]+$/gm,'');
+await fs.mkdir(path.join(root,'dist'),{recursive:true});
+await fs.writeFile(path.join(root,'index.html'),result);
+await fs.writeFile(path.join(root,'dist','index.html'),result);
+await fs.copyFile(path.join(root,'public/fonts/OFL.txt'),path.join(root,'dist','FONT-LICENSE.txt'));
+console.log('Built the original HTML story with live renderer bindings. No data was loaded and no test was run.');

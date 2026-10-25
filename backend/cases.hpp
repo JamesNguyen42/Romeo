@@ -141,10 +141,14 @@ bool resolve_tool(const ScriptTools &scripts, std::string_view name, ResolvedToo
 
 struct CaseDef {
     FixedString<kNameBytes> id;
+    // Fresh runs retain their source scenario independently of the unique run id.
+    FixedString<kNameBytes> scenario_id;
     FixedString<kTitleBytes> title;
     FixedString<kReportBytes> report;
     FixedString<128> bugs, difficulty, rev, rev_good;
     bool rev_good_given = false;
+    bool comparison = false;
+    uint32_t view_seed = 0;
     FixedArray<FixedString<kNameBytes>, 16> withhold;
     char setup = 'A';
 

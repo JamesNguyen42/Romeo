@@ -141,6 +141,8 @@ struct RunSummary {
     bool depth, lidar;
     uint32_t lidar_points;  // last sweep; written as null without a lidar
     double lidar_sweep_ms;  // median over every sweep; written as null without a lidar
+    uint32_t view_seed;
+    int warmup_frames, measured_frames;
 };
 
 bool write_summary(const char *path, const RunSummary &s);
