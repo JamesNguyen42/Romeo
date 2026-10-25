@@ -684,6 +684,7 @@ void on_case_call_done(Service &s, ModelCall &call, long http, CURLcode rc) {
         // Descending by (p, name), like sorting (p, name) pairs in reverse.
         std::sort(ranked.begin(), ranked.end(), [](const Ranked &a, const Ranked &b) { return a.p != b.p ? a.p > b.p : a.name > b.name; });
         const double ms = yyjson_get_num(yyjson_obj_get(yyjson_obj_get(root, "timings"), "inference_ms"));
+        const double input_tokens = yyjson_get_num(yyjson_obj_get(yyjson_obj_get(root, "usage"), "input_tokens"));
         ++s.store->decisions_total;
         s.store->decision_ms_total += ms;
         emit(s, c, "decision", [&](EventLine &b) {
@@ -693,7 +694,7 @@ void on_case_call_done(Service &s, ModelCall &call, long http, CURLcode rc) {
                 std::string_view label = resolve_tool(*s.scripts, ranked[i].name, t) ? t.label : std::string_view();
                 cat(b, i ? "," : "", "{\"action\":", json_string(ranked[i].name), ",\"label\":", json_string(label), ",\"p\":", decimal(ranked[i].p, 4), "}");
             }
-            cat(b, "],\"chosen\":", json_string(chosen), ",\"model\":\"clef-flash\",\"inference_ms\":", decimal(ms, 1), "}");
+            cat(b, "],\"chosen\":", json_string(chosen), ",\"model\":\"clef-flash\",\"inference_ms\":", decimal(ms, 1), ",\"input_tokens\":", decimal(input_tokens, 0), "}");
         });
         ResolvedTool t;
         if (!chosen.empty() && resolve_tool(*s.scripts, chosen, t)) execute(s, c, chosen);
@@ -704,10 +705,15 @@ void on_case_call_done(Service &s, ModelCall &call, long http, CURLcode rc) {
     std::string_view content = json_str(msg, "content");
     std::string_view reasoning = json_str(msg, "reasoning_content");
     if (!yyjson_get_str(yyjson_obj_get(msg, "reasoning_content"))) reasoning = json_str(msg, "reasoning");
+    // Token counts ride on the event the call produces, so per-case model cost can be summed from the case log.
+    yyjson_val *usage = yyjson_obj_get(root, "usage");
+    FixedStringBuilder<96> tokens;
+    cat(tokens, ",\"prompt_tokens\":", decimal(yyjson_get_num(yyjson_obj_get(usage, "prompt_tokens")), 0), ",\"completion_tokens\":",
+        decimal(yyjson_get_num(yyjson_obj_get(usage, "completion_tokens")), 0));
 
     if (call.kind == CallKind::think) {
         emit(s, c, "thought", [&](EventLine &b) {
-            cat(b, "{\"text\":", json_string(content), ",\"reasoning\":", json_string(reasoning), ",\"model\":\"ornith-35b\"}");
+            cat(b, "{\"text\":", json_string(content), ",\"reasoning\":", json_string(reasoning), ",\"model\":\"ornith-35b\"", tokens.view(), "}");
         });
     } else if (call.kind == CallKind::conclude) {
         std::string_view diag = content, fix, missing;
@@ -724,7 +730,7 @@ void on_case_call_done(Service &s, ModelCall &call, long http, CURLcode rc) {
         }
         emit(s, c, "conclusion", [&](EventLine &b) {
             cat(b, "{\"diagnosis\":", json_string(diag), ",\"fix\":", json_string(fix), ",\"supported\":", supported ? "true" : "false",
-                ",\"model\":\"ornith-35b\"}");
+                ",\"model\":\"ornith-35b\"", tokens.view(), "}");
         });
         // A conclusion without a supported cause stops the case with what is missing; nothing is verified.
         if (!supported) {
@@ -741,7 +747,7 @@ void on_case_call_done(Service &s, ModelCall &call, long http, CURLcode rc) {
         else start_verification(s, c);
     } else if (call.kind == CallKind::stop_note) {
         emit(s, c, "stopped", [&](EventLine &b) {
-            cat(b, "{\"reason\":\"The available tools cannot establish more.\",\"missing\":", json_string(content), "}");
+            cat(b, "{\"reason\":\"The available tools cannot establish more.\",\"missing\":", json_string(content), tokens.view(), "}");
         });
     }
 }

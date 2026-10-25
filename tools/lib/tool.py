@@ -17,8 +17,14 @@ TOOLS = Path(__file__).resolve().parents[1]
 ORNITH = os.environ.get("ORNITH_URL", "http://127.0.0.1:8000/v1/chat/completions")
 
 
+TOKENS = {"prompt_tokens": 0, "completion_tokens": 0, "calls": 0}  # this tool run's Ornith usage, reported in result.json
+
+
 def finish(summary, facts=(), artifacts=(), data=None):
-    (JOB / "result.json").write_text(json.dumps({"summary": summary, "facts": list(facts), "artifacts": list(artifacts), "data": data or {}}))
+    data = dict(data or {})
+    if TOKENS["calls"]:
+        data["tokens"] = TOKENS
+    (JOB / "result.json").write_text(json.dumps({"summary": summary, "facts": list(facts), "artifacts": list(artifacts), "data": data}))
     sys.exit(0)
 
 
@@ -42,7 +48,11 @@ def ornith(system, user, max_tokens=1200, think=False):
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
     req = urllib.request.Request(ORNITH, json.dumps(body).encode(), {"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=300) as r:
-        msg = json.loads(r.read())["choices"][0]["message"]
+        resp = json.loads(r.read())
+    msg = resp["choices"][0]["message"]
+    for k in ("prompt_tokens", "completion_tokens"):
+        TOKENS[k] += (resp.get("usage") or {}).get(k, 0)
+    TOKENS["calls"] += 1
     return msg.get("content") or "", msg.get("reasoning_content") or msg.get("reasoning") or ""
 
 
