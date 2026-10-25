@@ -120,7 +120,7 @@ export class LiveStore {
   }
 
   async request(path, options = {}) {
-    if (this.base === null) throw new Error('Start Romeo, then open http://127.0.0.1:18790.');
+    if (this.base === null) throw new Error('Start Juliet, then open http://127.0.0.1:18790.');
     const controller = new AbortController();
     const signal = options.signal || this.lifetime.signal;
     const abort = () => controller.abort();
@@ -131,8 +131,8 @@ export class LiveStore {
       const response = await this.fetch(this.base + path, { ...options, signal: controller.signal, cache: 'no-store' });
       const text = await response.text();
       let value;
-      try { value = JSON.parse(text); } catch { throw new Error(`Romeo returned an unreadable response (${response.status}).`); }
-      if (!response.ok) throw new Error(value?.error || `Romeo returned ${response.status}.`);
+      try { value = JSON.parse(text); } catch { throw new Error(`Juliet returned an unreadable response (${response.status}).`); }
+      if (!response.ok) throw new Error(value?.error || `Juliet returned ${response.status}.`);
       return value;
     } finally {
       clearTimeout(timer);
@@ -143,7 +143,7 @@ export class LiveStore {
   start() {
     if (this.stream || this.disposed) return;
     if (this.base === null) {
-      this.patch({ error: 'Start Romeo, then open http://127.0.0.1:18790.' });
+      this.patch({ error: 'Start Juliet, then open http://127.0.0.1:18790.' });
       return;
     }
     try {
@@ -152,12 +152,12 @@ export class LiveStore {
         this.patch({ connected: true });
         return this.refresh();
       };
-      this.stream.onerror = () => this.patch({ connected: false, error: 'Connection lost. Waiting for Romeo to reconnect.' });
+      this.stream.onerror = () => this.patch({ connected: false, error: 'Connection lost. Waiting for Juliet to reconnect.' });
       this.stream.onmessage = message => {
         try {
           const raw = JSON.parse(message.data);
           const events = liveMergeEvents([raw]);
-          if (events.length !== 1) throw new Error('Romeo sent an unreadable event.');
+          if (events.length !== 1) throw new Error('Juliet sent an unreadable event.');
           const event = events[0];
           const old = this.records.get(event.case) || { summary: {
             id: event.case, title: event.case, setup: '', status: 'investigating',
@@ -168,7 +168,7 @@ export class LiveStore {
           this.publish();
         } catch (error) { this.patch({ error: error.message || 'Could not read a case event.' }); }
       };
-    } catch (error) { this.patch({ connected: false, error: error.message || 'Could not connect to Romeo.' }); }
+    } catch (error) { this.patch({ connected: false, error: error.message || 'Could not connect to Juliet.' }); }
   }
 
   stop() {
@@ -192,10 +192,10 @@ export class LiveStore {
         this.request('/api/cases', { signal: controller.signal }),
         this.request('/api/scenarios', { signal: controller.signal }),
       ]);
-      if (!Array.isArray(summaries) || !summaries.every(liveSummary)) throw new Error('Romeo returned an invalid case list.');
+      if (!Array.isArray(summaries) || !summaries.every(liveSummary)) throw new Error('Juliet returned an invalid case list.');
       if (!liveObject(catalog) || !Array.isArray(catalog.scenarios) || !catalog.scenarios.every(item =>
         liveObject(item) && ['id', 'title', 'report', 'setup'].every(key => typeof item[key] === 'string')))
-        throw new Error('Romeo returned an invalid test list.');
+        throw new Error('Juliet returned an invalid test list.');
       if (this.disposed || controller.signal.aborted || version !== this.refreshVersion) return;
       const next = new Map();
       for (const summary of summaries) {
@@ -209,7 +209,7 @@ export class LiveStore {
       this.publish();
       if (this.state.selectedId) await this.loadSelected(this.state.selectedId, this.selection);
     } catch (error) {
-      if (!controller.signal.aborted && !this.disposed) this.patch({ error: error.name === 'AbortError' ? 'Romeo did not respond in time.' : error.message });
+      if (!controller.signal.aborted && !this.disposed) this.patch({ error: error.name === 'AbortError' ? 'Juliet did not respond in time.' : error.message });
     }
   }
 
@@ -244,7 +244,7 @@ export class LiveStore {
       this.publish();
     } catch (error) {
       if (!controller.signal.aborted && !this.disposed && selection === this.selection)
-        this.patch({ loading: false, error: error.name === 'AbortError' ? 'Romeo did not respond in time.' : error.message });
+        this.patch({ loading: false, error: error.name === 'AbortError' ? 'Juliet did not respond in time.' : error.message });
     }
   }
 
@@ -255,7 +255,7 @@ export class LiveStore {
       const summary = await this.request(`/api/scenarios/${encodeURIComponent(scenarioId)}/runs`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode, view_seed }),
       });
-      if (!liveSummary(summary)) throw new Error('Romeo did not return a run identifier.');
+      if (!liveSummary(summary)) throw new Error('Juliet did not return a run identifier.');
       if (this.disposed) return summary.id;
       const old = this.records.get(summary.id);
       this.records.set(summary.id, { summary: liveApply(summary, old?.events || []), events: old?.events || [], loaded: false });

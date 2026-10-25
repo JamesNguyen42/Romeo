@@ -1,6 +1,8 @@
-# Romeo story UI
+# Juliet story UI
 
-The original Crosswalk Case Story layout, connected to Romeo's renderer and saved evidence. The frontend is assembled by a dependency-free Node build. Romeo's C++ server serves the page and its API together.
+The original Crosswalk Case Story layout, connected to Juliet's renderer and saved evidence. The frontend is assembled by a dependency-free Node build. Juliet's C++ server serves the page and its API together.
+
+The existing `romeo` and `romeo-render` binary names, `ROMEO_*` settings and repository paths remain compatible with earlier integrations.
 
 ## Start both with one command
 
@@ -70,7 +72,10 @@ Renderer measurements and replay artifacts are documented in [JAMES3-API.md](../
 
 - `ui/story/template.html` contains the original layout, styles and visual story markup.
 - `ui/story/logic.js` binds that layout to the selected case and its live measurements.
+- `ui/story/tool-story.js` turns recorded decisions, actions and facts into the v3 tool-choice scene. It uses actual offered options and probabilities, with controls to replay earlier choices. An empty case shows a reference list without scores; a direct comparison clearly says it makes no model call.
 - `ui/story/live-data.js` reads events, case records and renderer artifacts. A new run is submitted only by a run control.
 - `ui/story/runtime.html` preserves the original bundled runtime and embedded assets.
 
 `ui/build.mjs` combines these sources into `ui/index.html` and `ui/dist/index.html`, with the font license alongside the served page. Edit the source files rather than those generated copies. Building produces page files; it does not start a backend, load case data or execute a renderer test.
+
+Step 3 preserves the v3 case notebook and grouped tool cards. Playback reveals already recorded events; it never executes a tool. A request can be queued or running until a result arrives. Missing probabilities, unavailable evidence and failed results are not presented as successful choices or completed tests. Tool absence is not a recorded explanation of eligibility, so the UI does not invent blocking reasons. The pictured future learning loop is not presented as a current capability.
