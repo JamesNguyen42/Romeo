@@ -168,22 +168,59 @@ static bool start_job(Service &s, Case &c, const SpawnRequest &r) {
     return pid > 0;
 }
 
+// A job process is running when its outbox file exists (it was started) and its exit file does not.
+static bool job_process_running(const Service &s) {
+    for (const Case &c : s.store->cases)
+        for (const Pending &p : c.pending) {
+            if (!p.job) continue;
+            PathText outbox, exit_file;
+            cat(outbox, s.cfg.data, "/outbox/", p.action_id, ".json");
+            cat(exit_file, p.dir, "/exit");
+            if (file_exists(outbox.c_str()) && !file_exists(exit_file.c_str())) return true;
+        }
+    return false;
+}
+
 void commit_iteration(Service &s) {
     wal_commit(*s.wal, [&](const WalRecord &r) { broadcast_committed(s, r); });
 
+    // One job process at a time keeps frame-time measurements free of interference. Jobs that cannot start yet
+    // stay queued in order; their action_requested records are already durable.
     SpawnQueue &q = *s.spawns;
+    bool busy = job_process_running(s);
+    uint32_t kept = 0;
     for (uint32_t i = 0; i < q.items.count; ++i) {
         const SpawnRequest r = q.items[i];
         if (r.case_index >= s.store->cases.count) continue;
         Case &c = s.store->cases[r.case_index];
         if (c.generation != r.generation) continue;
-        if (!start_job(s, c, r) && !(r.kind == "verify_fix")) {
+        if (busy) {
+            q.items[kept++] = r;
+            continue;
+        }
+        if (start_job(s, c, r)) {
+            busy = true;
+        } else if (r.kind != "verify_fix") {
             FixedStringBuilder<256> text;
             cat(text, "Job ", r.action_id, " was already started once; not starting it again.");
             emit_fact(s, c, text.view());
         }
     }
-    q.items.clear();
+    q.items.count = kept;
+}
+
+struct JobParams {
+    char setup;
+    bool baseline;
+    FixedStringBuilder<64> args;
+};
+
+// The single definition of a built-in renderer job's parameters, derived from its kind.
+static JobParams job_params(const Service &s, const Case &c, std::string_view kind) {
+    JobParams j{kind == "try_smaller_setup" ? 'A' : c.def.setup, kind == "compare_baseline" || kind == "verify_fix", {}};
+    if (kind == "capture_trace") j.args.add("--trace");
+    else if (kind == "measure_memory") cat(j.args, "--frames ", s.cfg.frames * 2);
+    return j;
 }
 
 static void queue_job(Service &s, Case &c, std::string_view action_id, std::string_view kind, char setup, bool baseline, std::string_view args, bool script) {
@@ -350,18 +387,15 @@ static void execute(Service &s, Case &c, std::string_view kind) {
     }
 
     if (t.builtin->kind == ToolKind::renderer_job) {
-        const bool baseline = id == ToolId::compare_baseline;
-        const char setup = id == ToolId::try_smaller_setup ? 'A' : c.def.setup;
+        const JobParams j = job_params(s, c, kind);
+        const char setup = j.setup;
         setup_text.add(setup);
-        FixedStringBuilder<64> args;
-        if (id == ToolId::capture_trace) args.add("--trace");
-        else if (id == ToolId::measure_memory) cat(args, "--frames ", s.cfg.frames * 2);
         bool ok = emit(s, c, "action_requested", [&](EventLine &b) {
             cat(b, "{\"action_id\":", json_string(action_id.view()), ",\"kind\":", json_string(kind), ",\"label\":\"");
             b.escaped(t.label).add(" on setup ").add(setup);
             cat(b, "\",\"job\":true,\"dir\":", json_string(dir.view()), ",\"args\":{\"setup\":", json_string(setup_text.view()), "}}");
         });
-        if (ok) queue_job(s, c, action_id.view(), kind, setup, baseline, args.view(), false);
+        if (ok) queue_job(s, c, action_id.view(), kind, setup, j.baseline, j.args.view(), false);
         return;
     }
 
@@ -666,8 +700,7 @@ void agent_tick(Service &s) {
         for (const Pending &p : expired) record_timeout(s, c, p);
 
         if (c.status != Status::investigating || c.busy || c.pending.count || c.concluded || c.frozen) continue;
-        // One renderer job at a time keeps frame-time measurements free of interference.
-        if (running_jobs(store) > 0) continue;
+        // Jobs are serialized when they start (commit_iteration), so other cases keep deciding while one job runs.
         ArenaScope scope(s.request);
         if (c.done.count >= 9) {
             execute(s, c, "stop_need_more");
@@ -732,8 +765,12 @@ bool recover(Service &s) {
             ids.push(p.action_id.view());
             PathText outbox;
             cat(outbox, s.cfg.data, "/outbox/", p.action_id, ".json");
-            if (p.job && !file_exists(outbox.c_str()))
-                RLOG_WARN("case {}: job {} has no outbox file, so it never started; it will not be started now", c.def.id.view(), p.action_id.view());
+            if (p.job && !file_exists(outbox.c_str())) {
+                // Never started: starting it now is its first and only start (the outbox O_EXCL rule still holds).
+                const JobParams j = job_params(s, c, p.kind.view());
+                queue_job(s, c, p.action_id.view(), p.kind.view(), j.setup, j.baseline, j.args.view(), p.script);
+                RLOG_INFO("case {}: job {} never started before the restart; queued it", c.def.id.view(), p.action_id.view());
+            }
         }
         std::sort(ids.begin(), ids.end());
         emit(s, c, "restarted", [&](EventLine &b) {
