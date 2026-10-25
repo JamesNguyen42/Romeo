@@ -3,7 +3,7 @@
 // Files are written with open()/write()/close(). Text is formatted with FixedStringBuilder into fixed storage;
 // FileWriter batches it into a caller-provided buffer. Formats are fixed because the case service parses them:
 // log.jsonl, frames.csv, memory.csv, trace.json (Chrome trace), summary.json, image.png, image.rgba and the
-// tmp/ thumbnails.
+// tmp/ thumbnails; with a depth sensor depth.png and depth.f32, with a lidar points.ply.
 #pragma once
 
 #include <chrono>
@@ -13,6 +13,8 @@
 #include <string_view>
 
 #include "fixed.hpp"
+
+struct LidarPoint; // raster.hpp
 
 using Clock = std::chrono::steady_clock;
 
@@ -75,7 +77,7 @@ Log open_log(const char *path);
 
 // ---------------------------------------------------------------- trace.json
 
-enum class TraceName : uint8_t { frame, wait_asset_lock, raster_tiles, asset_read_parse };
+enum class TraceName : uint8_t { frame, wait_asset_lock, raster_tiles, asset_read_parse, lidar_sweep, raster_depth };
 
 struct TraceEvent {
     double start_ms, dur_ms;
@@ -112,9 +114,17 @@ Path thumbnail_path(std::string_view tmp_dir, int view, int frame, bool per_fram
 void write_thumbnail(const char *path, const uint32_t *color, int width, int height, romeo::Arena &scratch);
 
 // PNG through stb_image_write; every stb allocation is bump-allocated from `scratch`, which needs
-// png_scratch_bytes() of space.
-size_t png_scratch_bytes(int width, int height);
+// png_scratch_bytes() of space for an image with `channels` 8-bit channels.
+size_t png_scratch_bytes(int width, int height, int channels);
 bool write_png(const char *path, const uint32_t *rgba, int width, int height, romeo::Arena &scratch);
+
+// depth.png: 8-bit grey, linear in eye depth between `near_m` (255) and `far_m` (0). `metres` holds width * height
+// eye-space depths. The grey image is built in `scratch`, which needs depth_png_scratch_bytes() of space.
+size_t depth_png_scratch_bytes(int width, int height);
+bool write_depth_png(const char *path, const float *metres, int width, int height, float near_m, float far_m, romeo::Arena &scratch);
+
+// points.ply: ASCII PLY with one "x y z intensity" vertex per point, written through `io_buffer`.
+bool write_ply(const char *path, const LidarPoint *points, uint32_t count, uint8_t *io_buffer, size_t io_bytes);
 
 // ---------------------------------------------------------------- summary.json
 
@@ -127,6 +137,10 @@ struct RunSummary {
     size_t cache_entries;
     uint64_t tmp_bytes;
     double total_ms;
+    int cameras;
+    bool depth, lidar;
+    uint32_t lidar_points;  // last sweep; written as null without a lidar
+    double lidar_sweep_ms;  // median over every sweep; written as null without a lidar
 };
 
 bool write_summary(const char *path, const RunSummary &s);

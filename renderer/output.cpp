@@ -1,4 +1,5 @@
 #include "output.hpp"
+#include "raster.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -184,7 +185,7 @@ void Log::line(std::string_view level, std::string_view msg, std::string_view ex
 // ---------------------------------------------------------------- trace.json
 
 bool write_trace(const char *path, const TraceBuffer *buffers, uint32_t buffer_count, uint8_t *io_buffer, size_t io_bytes) {
-    static constexpr std::string_view kNames[] = {"frame", "wait_asset_lock", "raster_tiles", "asset_read_parse"};
+    static constexpr std::string_view kNames[] = {"frame", "wait_asset_lock", "raster_tiles", "asset_read_parse", "lidar_sweep", "raster_depth"};
     FileWriter w;
     if (!w.open(path, io_buffer, io_bytes)) return false;
     w.add("{\"traceEvents\":[");
@@ -243,12 +244,13 @@ void write_thumbnail(const char *path, const uint32_t *color, int width, int hei
     write_file(path, px, n * sizeof(uint32_t));
 }
 
-size_t png_scratch_bytes(int width, int height) {
-    // Every allocation stbi_write_png_to_func() makes for one 4-channel image. Bump realloc never frees, so the
+size_t png_scratch_bytes(int width, int height, int channels) {
+    // Every allocation stbi_write_png_to_func() makes for one image with `channels` channels. Bump realloc never frees, so the
     // bound is the sum of all requested blocks, each padded to the 16-byte alloc_bytes() alignment.
     constexpr size_t kPad = alignof(std::max_align_t) - 1;
     constexpr size_t kHash = 16384;                         // stbiw__ZHASH chains
-    const size_t filtered = (size_t(width) * 4 + 1) * size_t(height);
+    const size_t row = size_t(width) * size_t(channels);
+    const size_t filtered = (row + 1) * size_t(height);
 
     // A hash chain holds at most 2 * quality = 16 pointers before stb halves it, so its stretchy buffer grows
     // through capacities 2, 5, 11 and 23, each block carrying an 8-byte header.
@@ -260,11 +262,13 @@ size_t png_scratch_bytes(int width, int height) {
     const size_t stream = filtered + filtered / 8 + 16;
     const size_t stream_blocks = 2 * (2 * stream + 1) + 40 * (8 + kPad);
 
-    return Arena::budget_bytes(filtered) + Arena::budget_bytes(size_t(width) * 4) + Arena::budget_bytes(kHash * sizeof(void *)) +
+    return Arena::budget_bytes(filtered) + Arena::budget_bytes(row) + Arena::budget_bytes(kHash * sizeof(void *)) +
            chains + stream_blocks + Arena::budget_bytes(stream + 57);
 }
 
-bool write_png(const char *path, const uint32_t *rgba, int width, int height, Arena &scratch) {
+namespace {
+
+bool write_png_channels(const char *path, const void *pixels, int width, int height, int channels, Arena &scratch) {
     int fd = open_for_write(path);
     if (fd < 0) return false;
     struct Sink { int fd; bool ok; } sink{fd, true};
@@ -274,9 +278,48 @@ bool write_png(const char *path, const uint32_t *rgba, int width, int height, Ar
     };
     ArenaScope scope(scratch);
     g_png_arena = &scratch;
-    int ok = stbi_write_png_to_func(on_bytes, &sink, width, height, 4, rgba, width * 4);
+    int ok = stbi_write_png_to_func(on_bytes, &sink, width, height, channels, pixels, width * channels);
     g_png_arena = nullptr;
     return ::close(fd) == 0 && ok != 0 && sink.ok;
+}
+
+} // namespace
+
+bool write_png(const char *path, const uint32_t *rgba, int width, int height, Arena &scratch) {
+    return write_png_channels(path, rgba, width, height, 4, scratch);
+}
+
+size_t depth_png_scratch_bytes(int width, int height) {
+    return Arena::budget_bytes(size_t(width) * size_t(height), 1) + png_scratch_bytes(width, height, 1);
+}
+
+bool write_depth_png(const char *path, const float *metres, int width, int height, float near_m, float far_m, Arena &scratch) {
+    ArenaScope scope(scratch);
+    const size_t pixels = size_t(width) * size_t(height);
+    auto *grey = static_cast<uint8_t *>(scratch.alloc_bytes(pixels, 1));
+    if (!grey) return false;
+    const float scale = 1.0f / (far_m - near_m);
+    for (size_t i = 0; i < pixels; ++i) {
+        const float t = std::clamp((metres[i] - near_m) * scale, 0.0f, 1.0f);
+        grey[i] = uint8_t(255.0f * (1.0f - t) + 0.5f);
+    }
+    return write_png_channels(path, grey, width, height, 1, scratch);
+}
+
+bool write_ply(const char *path, const LidarPoint *points, uint32_t count, uint8_t *io_buffer, size_t io_bytes) {
+    FileWriter w;
+    if (!w.open(path, io_buffer, io_bytes)) return false;
+    FixedStringBuilder<256> h;
+    h.add("ply\nformat ascii 1.0\nelement vertex ").num(count);
+    h.add("\nproperty float x\nproperty float y\nproperty float z\nproperty float intensity\nend_header\n");
+    w.add(h.view());
+    for (uint32_t i = 0; i < count; ++i) {
+        const LidarPoint &p = points[i];
+        FixedStringBuilder<128> b;
+        b.num(double(p.x), 4).add(' ').num(double(p.y), 4).add(' ').num(double(p.z), 4).add(' ').num(double(p.intensity), 4).add('\n');
+        w.add(b.view());
+    }
+    return w.close();
 }
 
 // ---------------------------------------------------------------- summary.json
@@ -288,6 +331,10 @@ bool write_summary(const char *path, const RunSummary &s) {
     b.add(",\"tile\":").num(s.tile).add(",\"p50_ms\":").num(s.p50_ms, 3).add(",\"p95_ms\":").num(s.p95_ms, 3);
     b.add(",\"p99_ms\":").num(s.p99_ms, 3).add(",\"max_ms\":").num(s.max_ms, 3).add(",\"spike_frames\":").num(s.spike_frames);
     b.add(",\"resident_end_bytes\":").num(s.resident_end_bytes).add(",\"cache_entries\":").num(s.cache_entries);
-    b.add(",\"tmp_bytes\":").num(s.tmp_bytes).add(",\"total_ms\":").num(s.total_ms, 1).add("}\n");
+    b.add(",\"tmp_bytes\":").num(s.tmp_bytes).add(",\"total_ms\":").num(s.total_ms, 1);
+    b.add(",\"cameras\":").num(s.cameras).add(",\"depth\":").boolean(s.depth).add(",\"lidar\":").boolean(s.lidar);
+    if (s.lidar) b.add(",\"lidar_points\":").num(s.lidar_points).add(",\"lidar_sweep_ms\":").num(s.lidar_sweep_ms, 3);
+    else b.add(",\"lidar_points\":null,\"lidar_sweep_ms\":null");
+    b.add("}\n");
     return !b.overflowed() && write_file(path, b.data, b.len);
 }
