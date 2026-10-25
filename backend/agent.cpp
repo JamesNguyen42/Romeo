@@ -347,8 +347,9 @@ static void execute(Service &s, Case &c, std::string_view kind) {
     if (id == ToolId::conclude) {
         ArenaScope scope(s.request);
         if (chat_call(s, c, CallKind::conclude,
-                      "Answer in JSON only: {\"diagnosis\": one sentence naming every cause the evidence supports, at most two, \"fix\": one sentence "
-                      "describing the code change}. Use only the evidence.",
+                      "Answer in JSON only: {\"supported\": true only if the evidence identifies a concrete cause, \"diagnosis\": one sentence "
+                      "naming every cause the evidence supports, at most two, \"fix\": one sentence describing the code change, \"missing\": "
+                      "what evidence is still needed if supported is false}. Use only the evidence.",
                       400, false))
             c.busy = true;
         return;
@@ -640,18 +641,29 @@ void on_case_call_done(Service &s, ModelCall &call, long http, CURLcode rc) {
             cat(b, "{\"text\":", json_string(content), ",\"reasoning\":", json_string(reasoning), ",\"model\":\"ornith-35b\"}");
         });
     } else if (call.kind == CallKind::conclude) {
-        std::string_view diag = content, fix;
+        std::string_view diag = content, fix, missing;
+        bool supported = true;
         size_t open = content.find('{'), close = content.rfind('}');
         if (open != std::string_view::npos && close != std::string_view::npos && close >= open) {
             if (yyjson_doc *j = parse_json(s.request, content.substr(open, close - open + 1))) {
                 yyjson_val *r = yyjson_doc_get_root(j);
                 if (yyjson_get_str(yyjson_obj_get(r, "diagnosis"))) diag = json_str(r, "diagnosis");
                 fix = json_str(r, "fix");
+                missing = json_str(r, "missing");
+                if (yyjson_is_bool(yyjson_obj_get(r, "supported"))) supported = yyjson_get_bool(yyjson_obj_get(r, "supported"));
             }
         }
         emit(s, c, "conclusion", [&](EventLine &b) {
-            cat(b, "{\"diagnosis\":", json_string(diag), ",\"fix\":", json_string(fix), ",\"model\":\"ornith-35b\"}");
+            cat(b, "{\"diagnosis\":", json_string(diag), ",\"fix\":", json_string(fix), ",\"supported\":", supported ? "true" : "false",
+                ",\"model\":\"ornith-35b\"}");
         });
+        // A conclusion without a supported cause stops the case with what is missing; nothing is verified.
+        if (!supported) {
+            emit(s, c, "stopped", [&](EventLine &b) {
+                cat(b, "{\"reason\":", json_string(diag), ",\"missing\":", json_string(missing.empty() ? std::string_view("not stated") : missing), "}");
+            });
+            return;
+        }
         // Verification runs the build without the planted change: the reference fix, or the agent-written fix.
         FixedString<kNameBytes> action_id;
         action_id_for(action_id, c);
