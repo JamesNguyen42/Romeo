@@ -42,10 +42,10 @@ branch = f"fix/{case}"
 feedback, attempts = "", []
 for attempt in (1, 2):
     content, reasoning = ornith(
-        "You fix renderer regressions. Think first: trace how the measured symptom arises in this code, then change only what causes it. Output one ```diff block only: a unified diff with a/ and b/ paths that applies with "
+        "You fix renderer regressions. Change only what causes the measured symptom. Output one ```diff block only, with no explanation: a unified diff with a/ and b/ paths that applies with "
         "`git apply` on top of the given revision. Keep the patch minimal and keep the code style.",
         f"Case:\n{INPUT['case_state']}\n\nThe change that introduced the problem:\n```diff\n{change[:8000]}\n```\n"
-        f"Current source of the changed files (numbered lines):{context}\n{feedback}", 12000, think=True)
+        f"Current source of the changed files (numbered lines):{context}\n{feedback}", 4000, think=False)  # a diff, not files: 1-2 min at eager speed
     patch = fenced(content, "diff") + "\n"
     (JOB / f"fix-{attempt}.patch").write_text(patch)
     work = Path(tempfile.mkdtemp(prefix=f"fix-{case}-"))
