@@ -11,9 +11,9 @@ LOG = ("frame 1042 render 11.2 ms wait_asset_lock 0.0 ms; frame 1043 render 11.4
        "frame 1044 render 83.1 ms wait_asset_lock 71.9 ms; worker tiles idle; ")
 
 
-def run(target_tokens):
+def run(target_tokens, max_out=256):
     context = (LOG * (target_tokens // 60 + 1))
-    body = {"model": model, "temperature": 0, "max_tokens": 256, "min_tokens": 256, "stream": True,
+    body = {"model": model, "temperature": 0, "max_tokens": max_out, "min_tokens": max_out, "stream": True,
             "stream_options": {"include_usage": True}, "chat_template_kwargs": {"enable_thinking": False},
             "messages": [{"role": "user", "content": f"Here is a render log:\n{context}\nExplain what causes the slow frames and how to fix it."}]}
     req = urllib.request.Request(url, data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
@@ -36,8 +36,8 @@ def run(target_tokens):
 
 results = {"model": label, "runs": []}
 run(256)  # warm-up, not recorded
-for target in (256, 1024, 4096, 8192):
-    r = run(target)
+for target, max_out in ((256, 256), (1024, 256), (4096, 256), (8192, 256), (1024, 8192)):
+    r = run(target, max_out)
     results["runs"].append(r)
     print(label, json.dumps(r), flush=True)
 json.dump(results, open(out, "w"), indent=1)
