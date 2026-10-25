@@ -69,7 +69,12 @@ the GB10 through `main` (auto-pull).
 | `GET /api/cases` | Array of case summaries (below) |
 | `GET /api/cases/{id}` | One case summary plus `events`: the full event list in order |
 | `GET /api/stream` | Server-Sent Events. Every new case event, one JSON object per `data:` line |
-| `POST /api/cases` | Open a case. Body: `{"title": "...", "setup": "D", "report": "free text"}`. Returns the summary |
+| `POST /api/cases` | Open a case. Body: `{"title": "...", "setup": "D", "report": "free text", "channel"?: "...", "user"?: "..."}`. Returns the summary |
+| `GET /api/cases/{id}/trace` | Chrome trace JSON (Perfetto, chrome://tracing) of the case's agent activity: tid 1 Clef, 2 Ornith, 3 jobs, 4 evidence tools |
+| `GET /api/cases/{id}/export` | One bundle `{"case": summary, "events": [...], "artifacts": [...]}` to save and replay a case offline |
+| `POST /api/cases/{id}/messages` | Add a chat message to a case. Body: `{"text", "channel", "user"}`. Appends a `message` event; returns the summary |
+| `POST /api/route` | Classify a chat message. Body: `{"text", "channel", "user", "case_id"?}`. Returns `{"intent", "p", "case_id"?, "action"}`; changes nothing |
+| `POST /api/tools/reload` | Reload `tools/catalog.json` (script tools). Returns `{"tools", "refused"}` |
 | `POST /api/cases/{id}/results` | Deliver a result for a pending action. Body: `{"action_id": "...", "source": "run" \| "fixture", "data": {...}}` |
 | `GET /api/artifacts/{id}/{name}` | A file the case produced: PNG image, frame-time CSV, Chrome-trace JSON, log JSONL |
 
@@ -100,7 +105,7 @@ read these events; they never need any other state.
 
 | `type` | `data` fields | Good visual |
 | --- | --- | --- |
-| `case_opened` | `title`, `setup`, `report` | New card on the board |
+| `case_opened` | `title`, `setup`, `report`; optional `difficulty`, `channel`, `user` | New card on the board |
 | `decision` | `candidates`: `[{"action": "...", "label": "...", "p": 0.71}, ...]`, `chosen`, `model`, `inference_ms` | Probability bars, chosen bar highlighted |
 | `action_requested` | `action_id`, `kind`, `args` | "Waiting for …" chip with a timer |
 | `action_result` | `action_id`, `source` (`run` or `fixture`), `summary`, `artifacts` | Chart, trace or image from `artifacts` |
@@ -108,6 +113,7 @@ read these events; they never need any other state.
 | `thought` | `text`, `reasoning` (the model's thinking, may be empty), `model` | "What it is thinking" bubble |
 | `conclusion` | `diagnosis`, `fix`, `model` | Headline card: the cause and the proposed change |
 | `restarted` | `pending`: action IDs still awaited | "Service restarted, still waiting" banner |
+| `message` | `text`, `channel`, `user` | Chat bubble on the case |
 | `stopped` | `reason`, `missing`: what evidence would be needed | Grey card with the missing list |
 | `done` | `summary`, `fix`: proposed change, `checks`: what passed | Green card, before/after visuals |
 
