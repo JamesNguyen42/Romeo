@@ -369,6 +369,19 @@ void describe_frame_run(Service &s, std::string_view dir, std::string_view label
         }
     if (spikes >= 2)
         cat(text, " Spikes repeat about every ", decimal(double(last - first) / double(spikes - 1) * sum.p50 / 1000.0, 1), " s.");
+
+    // Motion setups also report motion vectors against ground truth and edge detail on moving agents vs the rest.
+    PathText p;
+    cat(p, dir, "/summary.json");
+    FileData f = read_file(s.evidence, p.c_str(), size_t(1) << 16);
+    yyjson_doc *doc = f.status == ReadStatus::ok ? parse_json(s.evidence, f.bytes) : nullptr;
+    yyjson_val *r = yyjson_doc_get_root(doc);
+    if (yyjson_is_num(yyjson_obj_get(r, "mv_error_px"))) {
+        cat(text, " Motion vectors vs ground truth on moving pedestrians: mean error ", decimal(yyjson_get_num(yyjson_obj_get(r, "mv_error_px")), 4),
+            " px; edge detail on pedestrians ", decimal(yyjson_get_num(yyjson_obj_get(r, "agent_edge_energy")), 1), " vs static scene ",
+            decimal(yyjson_get_num(yyjson_obj_get(r, "static_edge_energy")), 1), " (motion blur lowers edge detail on moving objects); ego ",
+            yyjson_get_bool(yyjson_obj_get(r, "ego_moving")) ? "moving." : "stopped.");
+    }
 }
 
 // ---------------------------------------------------------------- instant evidence tools

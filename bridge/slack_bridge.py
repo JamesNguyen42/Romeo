@@ -40,7 +40,9 @@ lock = threading.Lock()
 state = json.loads(STATE.read_text()) if STATE.exists() else {"threads": {}}
 state.setdefault("approvals", {})
 state.setdefault("cards", {})
-state.setdefault("seen", [])  # message ts already handled: Slack can deliver one mention more than once  # case id -> {"ts", "stage", "detail"}: one status card per case, edited in place
+state.setdefault("seen", [])
+state.setdefault("prs", {})  # pull request number -> case id
+PR_SETUP = os.environ.get("PR_SETUP", "I")  # message ts already handled: Slack can deliver one mention more than once  # case id -> {"ts", "stage", "detail"}: one status card per case, edited in place
 
 STAGES = ["Investigating", "Diagnosis", "Regression check", "Fix", "Pull request", "Verify"]  # thread ts -> case id waiting for a person's "yes"
 REPO_URL = f"https://github.com/{PR_REPO}"
@@ -273,6 +275,11 @@ def on_event(e):
     elif typ == "done":
         checks = "\n".join(f"• {c}" for c in d.get("checks", []))
         post(cid, f":white_check_mark: *{cid} done* — {d.get('summary', '')}\n{checks}\n_Verified with: {d.get('verified_with', '')}_{case_links(cid)}", broadcast=True)
+        n = pr_for_case(cid)
+        if n:
+            links = case_links(cid).replace(":rocket:", "-").replace(":hammer_and_wrench:", "-").replace(":mag:", "-").replace(":page_facing_up:", "-")
+            gh("pr", "comment", n, "--repo", PR_REPO, "--body",
+               f"**Juliette found a regression in this pull request** (`{cid}`).\n\n{d.get('summary', '')}\n\n" + "\n".join(f"- {c}" for c in d.get("checks", [])) + f"\n{links}")
     elif typ == "stopped":
         post(cid, f":octagonal_sign: *{cid} stopped* — {d.get('reason', '')}\nMissing: {d.get('missing', '')}", broadcast=True)
     elif typ == "priority":
@@ -305,6 +312,42 @@ def case_links(cid):
     return ("\n" + "\n".join(dict.fromkeys(links))) if links else ""
 
 
+def gh(*args, timeout=60):
+    import subprocess
+    p = subprocess.run(["gh", *args], capture_output=True, text=True, timeout=timeout)
+    return p.returncode, (p.stdout + p.stderr).strip()
+
+
+def watch_pull_requests():
+    """Every open pull request (except the agent's own fix/* branches) becomes a case: run its head against its base."""
+    while True:
+        try:
+            code, out = gh("pr", "list", "--repo", PR_REPO, "--state", "open", "--json", "number,title,headRefName,baseRefName,url,author")
+            prs = json.loads(out) if code == 0 else []
+            for pr in prs:
+                n = str(pr["number"])
+                if pr["headRefName"].startswith("fix/") or n in state["prs"]:
+                    continue
+                _, files = gh("pr", "diff", n, "--repo", PR_REPO, "--name-only")
+                report = (f"Pull request #{n} \"{pr['title']}\" ({pr['url']}) changes {', '.join(files.split()) or 'files'}. "
+                          f"Find test gaps before merge: run the pull request head against {pr['baseRefName']} on the motion rig and check for regressions.")
+                case = api("POST", "/api/cases", {"title": f"PR #{n}: {pr['title']}"[:80], "setup": PR_SETUP, "report": report,
+                                                  "rev": pr["headRefName"], "rev_good": pr["baseRefName"]})
+                with lock:
+                    state["prs"][n] = case["id"]
+                    save()
+                post(case["id"], f":mag: *New pull request #{n}* — {pr['title']}\n{pr['url']}\nJuliette opened *{case['id']}*: find test gaps, run the head against `{pr['baseRefName']}` on rig {PR_SETUP}.")
+                gh("pr", "comment", n, "--repo", PR_REPO, "--body",
+                   f"Juliette is checking this pull request as `{case['id']}`: it runs this branch against `{pr['baseRefName']}` on rig {PR_SETUP} and looks for regressions. Results will follow here.")
+        except Exception as e:
+            print("pr watch failed:", type(e).__name__, str(e)[:200], flush=True)
+        time.sleep(30)
+
+
+def pr_for_case(cid):
+    return next((n for n, c in state["prs"].items() if c == cid), None)
+
+
 def follow_stream():
     while True:
         try:
@@ -323,6 +366,7 @@ def follow_stream():
 
 if __name__ == "__main__":
     threading.Thread(target=follow_stream, daemon=True).start()
+    threading.Thread(target=watch_pull_requests, daemon=True).start()
     sm = SocketModeClient(app_token=os.environ["SLACK_APP_TOKEN"], web_client=web)
     sm.socket_mode_request_listeners.append(handle)
     sm.connect()
